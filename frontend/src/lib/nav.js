@@ -1,0 +1,133 @@
+import {
+  Activity,
+  BadgeIndianRupee,
+  BarChart3,
+  BookOpen,
+  Boxes,
+  Building2,
+  CalendarCheck,
+  CalendarDays,
+  ClipboardList,
+  Contact,
+  CreditCard,
+  Database,
+  FileText,
+  FolderKanban,
+  Handshake,
+  Landmark,
+  LayoutDashboard,
+  LifeBuoy,
+  ListChecks,
+  Megaphone,
+  Monitor,
+  Package,
+  Receipt,
+  Send,
+  Settings,
+  ShieldCheck,
+  ShoppingBag,
+  ShoppingCart,
+  Sparkles,
+  Target,
+  Truck,
+  UserRound,
+  Users,
+  Warehouse,
+  Wallet,
+} from 'lucide-react'
+
+export const NAV_GROUPS = [
+  {
+    label: 'Overview',
+    items: [
+      { label: 'Command centre', to: '/', icon: LayoutDashboard, end: true, permission: 'analytics.dashboard.read' },
+      { label: 'AI assistant', to: '/assistant', icon: Sparkles, permission: 'ai.assistant.use' },
+    ],
+  },
+  {
+    label: 'Relationships',
+    items: [
+      { label: 'Companies', to: '/crm/companies', icon: Building2, permission: 'crm.company.read' },
+      { label: 'Contacts', to: '/crm/contacts', icon: Contact, permission: 'crm.contact.read' },
+      { label: 'Leads', to: '/crm/leads', icon: Target, permission: 'crm.lead.read' },
+      { label: 'Deals', to: '/crm/deals', icon: Handshake, permission: 'crm.deal.read' },
+      { label: 'Activities', to: '/crm/activities', icon: Activity, permission: 'crm.activity.read' },
+    ],
+  },
+  {
+    label: 'Sell',
+    items: [
+      { label: 'Sales orders', to: '/sales/orders', icon: ShoppingBag, permission: 'sales.salesorder.read' },
+      { label: 'Customers', to: '/sales/customers', icon: Users, permission: 'sales.customer.read' },
+      { label: 'Delivery challans', to: '/sales/delivery-challans', icon: Truck, permission: 'sales.deliverychallan.read' },
+      { label: 'Point of sale', to: '/pos', icon: Monitor, permission: 'pos.sale.read' },
+    ],
+  },
+  {
+    label: 'Inventory',
+    items: [
+      { label: 'Products', to: '/inventory/products', icon: Package, permission: 'inventory.product.read' },
+      { label: 'Categories', to: '/inventory/categories', icon: Boxes, permission: 'inventory.category.read' },
+      { label: 'Stock on hand', to: '/inventory/stock', icon: BarChart3, permission: 'inventory.product.read' },
+      { label: 'Stock movements', to: '/inventory/stock-moves', icon: Activity, permission: 'inventory.stockmove.read' },
+      { label: 'Warehouses', to: '/warehouse/warehouses', icon: Warehouse, permission: 'warehouse.warehouse.read' },
+      { label: 'Bins', to: '/warehouse/bins', icon: Database, permission: 'warehouse.bin.read' },
+    ],
+  },
+  {
+    label: 'Buy',
+    items: [
+      { label: 'Vendors', to: '/procurement/vendors', icon: Building2, permission: 'procurement.vendor.read' },
+      { label: 'Requisitions', to: '/procurement/requisitions', icon: ClipboardList, permission: 'procurement.requisition.read' },
+      { label: 'Purchase orders', to: '/procurement/purchase-orders', icon: ShoppingCart, permission: 'procurement.purchaseorder.read' },
+      { label: 'Vendor invoices', to: '/procurement/vendor-invoices', icon: Receipt, permission: 'procurement.vendorinvoice.read' },
+    ],
+  },
+  {
+    label: 'Money',
+    items: [
+      { label: 'Invoices', to: '/finance/invoices', icon: FileText, permission: 'finance.invoice.read' },
+      { label: 'Payments', to: '/finance/payments', icon: CreditCard, permission: 'finance.payment.read' },
+      { label: 'Chart of accounts', to: '/finance/accounts', icon: BookOpen, permission: 'finance.account.read' },
+      { label: 'Journal entries', to: '/finance/journal-entries', icon: BookOpen, permission: 'finance.journalentry.read' },
+      { label: 'Bank accounts', to: '/finance/bank-accounts', icon: Landmark, permission: 'finance.bankaccount.read' },
+      { label: 'Financial reports', to: '/finance/reports', icon: BarChart3, permission: 'finance.report.read' },
+    ],
+  },
+  {
+    label: 'People',
+    items: [
+      { label: 'Employees', to: '/hr/employees', icon: UserRound, permission: 'hr.employee.read' },
+      { label: 'Departments', to: '/hr/departments', icon: Building2, permission: 'hr.department.read' },
+      { label: 'Attendance', to: '/hr/attendance', icon: CalendarCheck, permission: 'hr.attendance.read' },
+      { label: 'Leave requests', to: '/hr/leave', icon: CalendarDays, permission: 'hr.leaverequest.read' },
+      { label: 'Payroll', to: '/hr/payroll', icon: Wallet, permission: 'hr.payrollrun.read' },
+      { label: 'Payslips', to: '/hr/payslips', icon: FileText, permission: 'hr.payslip.read' },
+    ],
+  },
+  {
+    label: 'Operations',
+    items: [
+      { label: 'Projects', to: '/projects/projects', icon: FolderKanban, permission: 'projects.project.read' },
+      { label: 'Tasks', to: '/projects/tasks', icon: ListChecks, permission: 'projects.task.read' },
+      { label: 'Support desk', to: '/support', icon: LifeBuoy, permission: 'support.ticket.read' },
+    ],
+  },
+  {
+    label: 'Growth',
+    items: [
+      { label: 'Campaigns', to: '/marketing/campaigns', icon: Megaphone, permission: 'marketing.campaign.read' },
+      { label: 'Segments', to: '/marketing/segments', icon: Users, permission: 'marketing.segment.read' },
+      { label: 'Campaign sends', to: '/marketing/sends', icon: Send, permission: 'marketing.campaignsend.read' },
+    ],
+  },
+  {
+    label: 'Workspace',
+    items: [
+      { label: 'Settings', to: '/settings/values', icon: Settings, permission: 'settings.setting.read' },
+      { label: 'Number sequences', to: '/settings/sequences', icon: BadgeIndianRupee, permission: 'settings.sequence.read' },
+      { label: 'Team', to: '/settings/users', icon: Users, permission: 'system.user.manage' },
+      { label: 'Roles & access', to: '/settings/roles', icon: ShieldCheck, permission: 'system.role.manage' },
+    ],
+  },
+]
