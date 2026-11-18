@@ -10,6 +10,8 @@ const TABS = [
   { key: 'balance-sheet', label: 'Balance sheet' },
   { key: 'trial-balance', label: 'Trial balance' },
   { key: 'receivables', label: 'Receivables' },
+  { key: 'aging', label: 'Aging' },
+  { key: 'exceptions', label: 'Exceptions' },
   { key: 'cash-flow', label: 'Cash flow' },
 ]
 
@@ -47,10 +49,12 @@ export default function Reports() {
       api.get('/finance/reports/balance-sheet'),
       api.get('/finance/reports/receivables'),
       api.get('/finance/reports/cash-flow'),
+      api.get('/finance/reports/aging'),
+      api.get('/finance/reports/exceptions'),
     ])
-      .then(([trial, pl, bs, ar, cash]) => {
+      .then(([trial, pl, bs, ar, cash, aging, exceptions]) => {
         if (!mounted) return
-        setData({ trial: trial.data, pl: pl.data, bs: bs.data, ar: ar.data, cash: cash.data })
+        setData({ trial: trial.data, pl: pl.data, bs: bs.data, ar: ar.data, cash: cash.data, aging: aging.data, exceptions: exceptions.data })
       })
       .catch((requestError) => mounted && setError(apiErrorMessage(requestError, 'Could not load financial reports.')))
       .finally(() => mounted && setLoading(false))
@@ -118,7 +122,7 @@ export default function Reports() {
             onClick={() => setActive(tab.key)}
             className={cn(
               'whitespace-nowrap rounded-xl px-4 py-2 text-xs font-bold transition',
-              active === tab.key ? 'bg-primary text-white shadow-sm' : 'text-muted hover:bg-surface-2 hover:text-ink',
+              active === tab.key ? 'bg-primary text-forest shadow-sm' : 'text-muted hover:bg-surface-2 hover:text-ink',
             )}
           >
             {tab.label}
@@ -257,6 +261,49 @@ export default function Reports() {
             {!(data.ar ?? []).length && <EmptyState compact title="Nothing outstanding" description="Every posted invoice is fully collected." />}
           </div>
         </div>
+      )}
+
+      {active === 'aging' && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {[
+            { title: 'Receivables aging', rows: data.aging?.receivables ?? [] },
+            { title: 'Payables aging', rows: data.aging?.payables ?? [] },
+          ].map((report) => (
+            <SectionCard key={report.title} title={report.title} description="Outstanding balances grouped by due-date exposure.">
+              <div className="divide-y divide-line">
+                {report.rows.map((row) => (
+                  <div key={row.label} className="flex items-center justify-between px-5 py-4">
+                    <div>
+                      <p className="text-sm font-semibold text-ink">{row.label}</p>
+                      <p className="mt-0.5 text-[11px] text-muted">{row.count} open document{row.count === 1 ? '' : 's'}</p>
+                    </div>
+                    <span className="font-bold tabular-nums text-ink">{money(row.total)}</span>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          ))}
+        </div>
+      )}
+
+      {active === 'exceptions' && (
+        <SectionCard title="Accounting exceptions" description="Items requiring follow-up before period close.">
+          <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-3">
+            {[
+              ['Draft journals', data.exceptions?.draft_journals ?? 0, '/finance/journal-entries'],
+              ['Pending approvals', data.exceptions?.pending_approvals ?? 0, '/finance/approvals'],
+              ['Overdue receivables', data.exceptions?.overdue_receivables ?? 0, '/finance/reports'],
+              ['Overdue payables', data.exceptions?.overdue_payables ?? 0, '/finance/vendor-payments'],
+              ['Unmatched bank transactions', data.exceptions?.unmatched_bank_transactions ?? 0, '/finance/bank-reconciliation'],
+              ['Open GRNI receipts', data.exceptions?.open_grni_receipts ?? 0, '/finance/reports'],
+            ].map(([label, count, to]) => (
+              <Link key={label} to={to} className="rounded-2xl border border-line bg-surface-2/40 p-4 transition hover:border-primary/30">
+                <p className="text-xs font-semibold text-muted">{label}</p>
+                <p className="mt-2 text-2xl font-bold tabular-nums text-ink">{count}</p>
+              </Link>
+            ))}
+          </div>
+        </SectionCard>
       )}
 
       {active === 'cash-flow' && (

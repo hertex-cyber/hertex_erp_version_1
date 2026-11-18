@@ -28,6 +28,12 @@ class Ticket(TenantBaseModel):
     )
     sla_due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    needs_project_work: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+    project_work_item_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("project_tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     messages: Mapped[list["TicketMessage"]] = relationship(
         back_populates="ticket", lazy="selectin", cascade="all, delete-orphan"

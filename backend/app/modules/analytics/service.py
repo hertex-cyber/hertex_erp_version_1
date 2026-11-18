@@ -83,7 +83,10 @@ async def dashboard_payload(db: AsyncSession, user: User) -> dict[str, Any]:
     )
     if not user.is_superuser and user.tenant_id:
         on_hand_subq = on_hand_subq.where(Product.tenant_id == user.tenant_id)
-    on_hand_subq = on_hand_subq.outerjoin(StockMove, StockMove.product_id == Product.id).group_by(
+    on_hand_subq = on_hand_subq.outerjoin(
+        StockMove,
+        (StockMove.product_id == Product.id) & (StockMove.status == "posted"),
+    ).group_by(
         Product.id, Product.purchase_price, Product.reorder_level
     )
     stock_subq = on_hand_subq.subquery()

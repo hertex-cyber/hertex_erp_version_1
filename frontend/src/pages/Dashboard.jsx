@@ -40,7 +40,7 @@ import { compactMoney, dateTimeLabel, money, num, titleCase } from '../lib/forma
 import { useAuth } from '../store/auth'
 import { EmptyState, KpiCard, PageHeader, SectionCard, Spinner } from '../components/ui'
 
-const CHART_COLORS = ['#174f3f', '#c25c39', '#c2953f', '#4f7f6c', '#8f5d4b', '#7a877f']
+const CHART_COLORS = ['#ff6900', '#ffb27a', '#a1a1aa', '#e05e00', '#71717a', '#3f3f46']
 
 function ChartTooltip({ active, payload, label, valueFormatter = money }) {
   if (!active || !payload?.length) return null
@@ -79,7 +79,7 @@ function Hero({ kpis, user }) {
             Here’s the pulse of the business — revenue, cash, stock and the work that needs attention today.
           </p>
           <div className="mt-6 flex flex-wrap gap-2">
-            <Link to="/sales/orders" className="inline-flex items-center gap-2 rounded-xl bg-gold px-4 py-2.5 text-xs font-bold text-forest transition hover:bg-[#d3a64f]">
+            <Link to="/sales/orders" className="inline-flex items-center gap-2 rounded-xl bg-gold px-4 py-2.5 text-xs font-bold text-forest transition hover:bg-primary-hover">
               <ShoppingBag size={15} /> New sales order
             </Link>
             <Link to="/assistant" className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/[0.06] px-4 py-2.5 text-xs font-bold text-white/80 transition hover:bg-white/[0.12] hover:text-white">
@@ -250,15 +250,15 @@ export default function Dashboard() {
               <AreaChart data={trend} margin={{ top: 8, right: 18, left: 4, bottom: 0 }}>
                 <defs>
                   <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#174f3f" stopOpacity={0.28} />
-                    <stop offset="100%" stopColor="#174f3f" stopOpacity={0.01} />
+                    <stop offset="0%" stopColor="#ff6900" stopOpacity={0.28} />
+                    <stop offset="100%" stopColor="#ff6900" stopOpacity={0.01} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid vertical={false} stroke="#ece6db" strokeDasharray="3 5" />
+                <CartesianGrid vertical={false} stroke="#27272a" strokeDasharray="3 5" />
                 <XAxis dataKey="month" tickLine={false} axisLine={false} dy={8} />
                 <YAxis tickLine={false} axisLine={false} tickFormatter={compactMoney} width={62} />
                 <Tooltip content={<ChartTooltip />} />
-                <Area type="monotone" dataKey="revenue" name="Revenue" stroke="#174f3f" strokeWidth={2.4} fill="url(#revenueFill)" dot={false} activeDot={{ r: 4, strokeWidth: 2, fill: '#fffdfa' }} />
+                <Area type="monotone" dataKey="revenue" name="Revenue" stroke="#ff6900" strokeWidth={2.4} fill="url(#revenueFill)" dot={false} activeDot={{ r: 4, strokeWidth: 2, fill: '#09090b' }} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -300,11 +300,11 @@ export default function Dashboard() {
           <div className="h-[260px] px-2 pb-4 pt-5">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={pipeline} layout="vertical" margin={{ top: 0, right: 24, left: 10, bottom: 0 }}>
-                <CartesianGrid horizontal={false} stroke="#ece6db" strokeDasharray="3 5" />
+                <CartesianGrid horizontal={false} stroke="#27272a" strokeDasharray="3 5" />
                 <XAxis type="number" tickLine={false} axisLine={false} tickFormatter={compactMoney} />
                 <YAxis type="category" dataKey="stage" tickLine={false} axisLine={false} width={92} tickFormatter={titleCase} />
                 <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="amount" name="Amount" fill="#c25c39" radius={[0, 8, 8, 0]} barSize={18}>
+                <Bar dataKey="amount" name="Amount" fill="#ff6900" radius={[0, 8, 8, 0]} barSize={18}>
                   {pipeline.map((entry, index) => (
                     <Cell key={entry.stage} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                   ))}

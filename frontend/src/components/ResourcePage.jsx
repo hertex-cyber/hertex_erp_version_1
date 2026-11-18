@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { api, apiErrorMessage } from '../lib/api'
 import { cn, debounce, today } from '../lib/format'
@@ -132,6 +132,7 @@ export default function ResourcePage({
   eyebrow,
   description,
   endpoint,
+  createEndpoint,
   permission,
   columns,
   fields,
@@ -155,6 +156,7 @@ export default function ResourcePage({
   onLoaded,
   rowKey,
   headerActions,
+  requireIdempotencyKey = false,
 }) {
   const can = useAuth((state) => state.can)
   const allowedRead = can(readPermission ?? `${permission}.read`)
@@ -180,6 +182,7 @@ export default function ResourcePage({
   const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting, setDeleting] = useState(false)
+  const idempotencyKey = useRef(null)
 
   const formFields = editing ? editFields ?? fields : fields
 
@@ -234,6 +237,7 @@ export default function ResourcePage({
 
   const openCreate = () => {
     setEditing(null)
+    if (requireIdempotencyKey) idempotencyKey.current = crypto.randomUUID()
     setValues(initialValues(fields))
     setFormErrors({})
     setOpen(true)
@@ -261,8 +265,12 @@ export default function ResourcePage({
         await api.patch(`${endpoint}/${editing.id}`, payload)
         toast.success('Changes saved', `${title} record updated.`)
       } else {
-        await api.post(endpoint, payload)
+        const config = requireIdempotencyKey
+          ? { headers: { 'Idempotency-Key': idempotencyKey.current ?? crypto.randomUUID() } }
+          : undefined
+        await api.post(createEndpoint ?? endpoint, payload, config)
         toast.success('Record created', `${title} record added successfully.`)
+        idempotencyKey.current = null
       }
       setOpen(false)
       await load({ refresh: true })
@@ -418,6 +426,7 @@ export default function ResourcePage({
               <>
                 {rowActions?.map((action) => {
                   if (action.show && !action.show(row)) return null
+                  if (action.render) return <span key={action.label}>{action.render(row)}</span>
                   const Icon = action.icon
                   return (
                     <button

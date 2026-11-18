@@ -28,9 +28,9 @@ from app.modules.integrations.service import send_message
 router = APIRouter(prefix="/integrations")
 
 
-async def _default_tenant_id(db: AsyncSession) -> Optional[str]:
+async def _default_tenant_id(db: AsyncSession) -> Optional[UUID]:
     tenant = await db.scalar(select(Tenant).order_by(Tenant.created_at).limit(1))
-    return str(tenant.id) if tenant else None
+    return tenant.id if tenant else None
 
 
 def _verify_meta_signature(request: Request, raw: bytes) -> None:

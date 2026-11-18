@@ -1,15 +1,28 @@
-const ACCESS_KEY = 'hertex.access'
-const REFRESH_KEY = 'hertex.refresh'
+const CSRF_KEY = 'hertex_csrf'
 
-export const getAccessToken = () => localStorage.getItem(ACCESS_KEY)
-export const getRefreshToken = () => localStorage.getItem(REFRESH_KEY)
+let accessToken = null
 
-export function setTokens({ access_token, refresh_token }) {
-  if (access_token) localStorage.setItem(ACCESS_KEY, access_token)
-  if (refresh_token) localStorage.setItem(REFRESH_KEY, refresh_token)
+export const getAccessToken = () => accessToken
+
+export function setAccessToken(token) {
+  accessToken = token || null
+  return accessToken
+}
+
+export function getCsrfToken() {
+  if (typeof document === 'undefined') return null
+  const prefix = `${CSRF_KEY}=`
+  const cookie = document.cookie.split('; ').find((item) => item.startsWith(prefix))
+  return cookie ? decodeURIComponent(cookie.slice(prefix.length)) : null
+}
+
+export function hasSessionCookie() {
+  return Boolean(getCsrfToken())
 }
 
 export function clearTokens() {
-  localStorage.removeItem(ACCESS_KEY)
-  localStorage.removeItem(REFRESH_KEY)
+  accessToken = null
+  localStorage.removeItem('hertex.auth')
+  localStorage.removeItem('hertex.access')
+  localStorage.removeItem('hertex.refresh')
 }

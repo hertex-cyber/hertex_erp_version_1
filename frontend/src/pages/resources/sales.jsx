@@ -61,6 +61,8 @@ export function SalesOrdersPage() {
       ]}
       fields={[
         { name: 'customer_id', label: 'Customer', type: 'reference', lookup: 'customers' },
+        { name: 'tax_registration_id', label: 'GST registration', type: 'reference', lookup: 'taxRegistrations' },
+        { name: 'place_of_supply_state_code', label: 'Place-of-supply state code', help: 'Two-digit GST state code, such as 29.' },
         { name: 'warehouse_id', label: 'Warehouse', type: 'reference', lookup: 'warehouses' },
         { name: 'order_date', label: 'Order date', type: 'date', required: true, default: 'today' },
         { name: 'channel', label: 'Channel', type: 'select', options: CHANNELS, default: 'manual', required: true },
@@ -76,6 +78,7 @@ export function SalesOrdersPage() {
             { name: 'unit_price', label: 'Unit price', type: 'number', required: true, default: 0, width: 'w-28' },
             { name: 'discount', label: 'Discount', type: 'number', default: 0, width: 'w-24' },
             { name: 'tax_rate', label: 'Tax %', type: 'number', default: 0, width: 'w-20' },
+            { name: 'tax_code_id', label: 'GST tax code', type: 'reference', lookup: 'taxCodes', flex: 1.5 },
           ],
         },
       ]}

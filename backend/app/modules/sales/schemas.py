@@ -58,9 +58,10 @@ class SalesOrderLineCreate(ORMModel):
     product_id: UUID
     description: Optional[str] = None
     quantity: Decimal = Field(gt=0)
-    unit_price: Decimal = Decimal("0")
-    discount: Decimal = Decimal("0")
-    tax_rate: Decimal = Decimal("0")
+    unit_price: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
+    discount: Decimal = Field(default=Decimal("0"), ge=0, max_digits=14, decimal_places=2)
+    tax_rate: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    tax_code_id: Optional[UUID] = None
 
 
 class SalesOrderLineRead(ORMModel):
@@ -71,6 +72,10 @@ class SalesOrderLineRead(ORMModel):
     unit_price: Decimal
     discount: Decimal
     tax_rate: Decimal
+    tax_code_id: Optional[UUID] = None
+    cgst_amount: Decimal = Decimal("0")
+    sgst_amount: Decimal = Decimal("0")
+    igst_amount: Decimal = Decimal("0")
     line_total: Decimal
 
 
@@ -80,6 +85,8 @@ class SalesOrderCreate(ORMModel):
     channel: str = "manual"
     notes: Optional[str] = None
     warehouse_id: Optional[UUID] = None
+    tax_registration_id: Optional[UUID] = None
+    place_of_supply_state_code: Optional[str] = Field(default=None, pattern=r"^[0-9]{2}$")
     lines: list[SalesOrderLineCreate] = Field(min_length=1)
 
 
@@ -102,6 +109,8 @@ class SalesOrderRead(ORMModel):
     total: Decimal
     notes: Optional[str] = None
     warehouse_id: Optional[UUID] = None
+    tax_registration_id: Optional[UUID] = None
+    place_of_supply_state_code: Optional[str] = None
     is_active: bool
     created_at: datetime
     customer: Optional[CustomerRead] = None

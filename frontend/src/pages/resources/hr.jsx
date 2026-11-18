@@ -182,10 +182,11 @@ export function PayrollPage() {
     <ResourcePage
       eyebrow="People"
       title="Payroll"
-      description="Monthly payroll runs, deductions and net pay."
+      description="Monthly payroll runs with ledger accruals. PF, ESI and TDS formulas are provisional; validate statutory rules before live payroll."
       endpoint="/hr/payroll-runs"
       permission="hr.payrollrun"
       createLabel="New payroll run"
+      canEdit={false}
       filters={[{ name: 'status', label: 'All statuses', options: ['draft', 'processed'] }]}
       emptyIcon={Wallet}
       columns={[
@@ -194,6 +195,7 @@ export function PayrollPage() {
         { key: 'total_gross', label: 'Gross', align: 'right', render: (row) => <Money value={row.total_gross} /> },
         { key: 'total_deductions', label: 'Deductions', align: 'right', render: (row) => <Money value={row.total_deductions} /> },
         { key: 'total_net', label: 'Net pay', align: 'right', render: (row) => <Money value={row.total_net} /> },
+        { key: 'journal_entry_id', label: 'Ledger', render: (row) => row.journal_entry_id ? <span className="font-mono text-xs" title={row.journal_entry_id}>{row.journal_entry_id.slice(0, 8)}</span> : <TypeBadge value="not posted" /> },
       ]}
       rowActions={[
         {
@@ -206,7 +208,6 @@ export function PayrollPage() {
       ]}
       fields={[
         { name: 'period', label: 'Period (YYYY-MM)', required: true, placeholder: '2026-11' },
-        { name: 'status', label: 'Status', type: 'select', options: ['draft', 'processed'], default: 'draft' },
       ]}
     />
   )

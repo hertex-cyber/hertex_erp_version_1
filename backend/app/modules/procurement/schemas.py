@@ -148,6 +148,7 @@ class GoodsReceiptCreate(ORMModel):
 class GoodsReceiptRead(ORMModel):
     id: UUID
     grn_number: str
+    journal_entry_id: Optional[UUID] = None
     purchase_order_id: UUID
     received_date: date
     received_by_id: Optional[UUID] = None
@@ -181,6 +182,35 @@ class VendorInvoiceUpdate(ORMModel):
     is_active: Optional[bool] = None
 
 
+class VendorInvoiceTaxLineCreate(ORMModel):
+    tax_code_id: UUID
+    registration_id: UUID
+    place_of_supply_state_code: str = Field(pattern=r"^[0-9]{2}$")
+    taxable_amount: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+    description: Optional[str] = Field(default=None, max_length=255)
+
+
+class VendorInvoiceTaxLinesUpdate(ORMModel):
+    lines: list[VendorInvoiceTaxLineCreate] = Field(min_length=1, max_length=200)
+
+
+class VendorInvoiceTaxLineRead(ORMModel):
+    id: UUID
+    tax_code_id: UUID
+    registration_id: UUID
+    tax_type_snapshot: str
+    can_claim_itc_snapshot: bool
+    description: Optional[str] = None
+    place_of_supply_state_code: str
+    taxable_amount: Decimal
+    cgst_rate: Decimal
+    sgst_rate: Decimal
+    igst_rate: Decimal
+    cgst_amount: Decimal
+    sgst_amount: Decimal
+    igst_amount: Decimal
+
+
 class VendorInvoiceRead(ORMModel):
     id: UUID
     vendor_id: UUID
@@ -190,7 +220,9 @@ class VendorInvoiceRead(ORMModel):
     due_date: Optional[date] = None
     amount: Decimal
     tax_amount: Decimal
+    paid_amount: Decimal = Decimal("0")
     status: str
     notes: Optional[str] = None
     is_active: bool
     created_at: datetime
+    tax_lines: list[VendorInvoiceTaxLineRead] = []

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -87,6 +87,12 @@ class GoodsReceipt(TenantBaseModel):
     __tablename__ = "procurement_goods_receipts"
 
     grn_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    journal_entry_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("finance_journal_entries.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
     purchase_order_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("procurement_purchase_orders.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -129,5 +135,51 @@ class VendorInvoice(TenantBaseModel):
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     tax_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    paid_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    tax_lines: Mapped[list["VendorInvoiceTaxLine"]] = relationship(
+        back_populates="invoice", lazy="selectin", cascade="all, delete-orphan"
+    )
+
+
+class VendorInvoiceTaxLine(TenantBaseModel):
+    __tablename__ = "procurement_vendor_invoice_tax_lines"
+
+    invoice_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("procurement_vendor_invoices.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tax_code_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_tax_codes.id", ondelete="RESTRICT"), nullable=False
+    )
+    registration_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("finance_tax_registrations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    tax_type_snapshot: Mapped[str] = mapped_column(String(20), nullable=False)
+    can_claim_itc_snapshot: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    place_of_supply_state_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    taxable_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    cgst_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    sgst_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    igst_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    cgst_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
+    sgst_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
+    igst_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
+    input_cgst_account_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="RESTRICT"), nullable=True
+    )
+    input_sgst_account_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="RESTRICT"), nullable=True
+    )
+    input_igst_account_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="RESTRICT"), nullable=True
+    )
+
+    invoice: Mapped[VendorInvoice] = relationship(back_populates="tax_lines")

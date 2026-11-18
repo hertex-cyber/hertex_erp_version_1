@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, Time
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, Time, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +31,7 @@ class Employee(TenantBaseModel):
     )
     date_of_joining: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     date_of_birth: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    date_of_exit: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
     employment_type: Mapped[str] = mapped_column(String(40), default="full_time")
     salary: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     bank_account: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
@@ -73,6 +74,9 @@ class LeaveRequest(TenantBaseModel):
 
 class PayrollRun(TenantBaseModel):
     __tablename__ = "hr_payroll_runs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "period", name="uq_hr_payroll_runs_tenant_period"),
+    )
 
     period: Mapped[str] = mapped_column(String(7), nullable=False, index=True)  # YYYY-MM
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
@@ -80,6 +84,12 @@ class PayrollRun(TenantBaseModel):
     total_deductions: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     total_net: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    journal_entry_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("finance_journal_entries.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
 
 
 class Payslip(TenantBaseModel):

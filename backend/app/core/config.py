@@ -18,8 +18,10 @@ class Settings(BaseSettings):
 
     JWT_SECRET: str = "change-me-to-a-long-random-string"
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    MFA_CHALLENGE_EXPIRE_MINUTES: int = 5
+    PASSWORD_RESET_EXPIRE_MINUTES: int = 30
 
     CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
 
@@ -43,6 +45,25 @@ class Settings(BaseSettings):
     SEED_ADMIN_EMAIL: str = "admin@hertex.dev"
     SEED_ADMIN_PASSWORD: str = "Admin@12345"
     SEED_DEMO_TENANT: str = "Hertex Demo Co"
+
+    PASSWORD_MIN_LENGTH: int = 12
+    PASSWORD_REQUIRE_UPPER: bool = True
+    PASSWORD_REQUIRE_LOWER: bool = True
+    PASSWORD_REQUIRE_DIGIT: bool = True
+    PASSWORD_REQUIRE_SYMBOL: bool = True
+    PASSWORD_HISTORY_SIZE: int = 5
+    MAX_FAILED_LOGINS: int = 5
+    ACCOUNT_LOCKOUT_MINUTES: int = 15
+    AUTH_RATE_LIMIT_PER_MINUTE: int = 20
+
+    MFA_ISSUER: str = "Hertex ERP"
+    REQUIRE_MFA_FOR_ADMINS: bool = False
+    REFRESH_COOKIE_NAME: str = "hertex_refresh"
+    CSRF_COOKIE_NAME: str = "hertex_csrf"
+
+    @property
+    def cookie_secure(self) -> bool:
+        return self.ENVIRONMENT not in {"development", "test"}
 
     @field_validator("DATABASE_URL")
     @classmethod

@@ -17,6 +17,7 @@ from app.core.exceptions import ValidationError
 from app.core.numbering import next_number
 from app.modules.finance.models import Account, JournalEntry, JournalLine
 from app.modules.finance.schemas import TallyImportResult
+from app.modules.finance.service import ensure_period_open
 from app.modules.identity.models import User
 
 _TYPE_RANGES = {
@@ -206,6 +207,8 @@ async def import_tally(
         return result
     if total_debit <= 0:
         return result
+
+    await ensure_period_open(db, user.tenant_id, opening_date)
 
     reference = "TALLY:OPENING"
     existing_entry = await db.scalar(

@@ -78,7 +78,7 @@ class UserRead(ORMModel):
 
 class UserCreate(ORMModel):
     email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=12, max_length=72)
     full_name: str = Field(min_length=1, max_length=200)
     phone: Optional[str] = None
     role_ids: list[UUID] = []
@@ -94,7 +94,7 @@ class UserUpdate(ORMModel):
 
 
 class AdminPasswordReset(ORMModel):
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=12, max_length=72)
 
 
 class LoginRequest(ORMModel):
@@ -106,11 +106,11 @@ class RegisterRequest(ORMModel):
     tenant_name: str = Field(min_length=2, max_length=200)
     full_name: str = Field(min_length=1, max_length=200)
     email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=12, max_length=72)
 
 
 class RefreshRequest(ORMModel):
-    refresh_token: str
+    refresh_token: Optional[str] = None
 
 
 class TokenPair(ORMModel):
@@ -133,7 +133,78 @@ class MeUpdate(ORMModel):
 
 class ChangePasswordRequest(ORMModel):
     current_password: str
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=12, max_length=72)
+
+
+class MfaChallenge(ORMModel):
+    mfa_required: bool = True
+    challenge_token: str
+    expires_in: int
+
+
+class MfaSetupRead(ORMModel):
+    secret: str
+    uri: str
+    recovery_codes: list[str] = []
+
+
+class MfaEnableRequest(ORMModel):
+    code: str = Field(min_length=6, max_length=6)
+    recovery_codes: list[str]
+
+
+class MfaDisableRequest(ORMModel):
+    password: str
+
+
+class MfaVerifyRequest(ORMModel):
+    challenge_token: str
+    code: Optional[str] = None
+    recovery_code: Optional[str] = None
+
+
+class MfaStatus(ORMModel):
+    enabled: bool
+    has_recovery_codes: bool = False
+
+
+class ForgotPasswordRequest(ORMModel):
+    email: EmailStr
+
+
+class ForgotPasswordRead(ORMModel):
+    message: str
+    dev_token: Optional[str] = None
+
+
+class ResetPasswordRequest(ORMModel):
+    token: str
+    new_password: str = Field(min_length=12, max_length=72)
+
+
+class PasswordPolicyRead(ORMModel):
+    min_length: int
+    require_upper: bool
+    require_lower: bool
+    require_digit: bool
+    require_symbol: bool
+    history_size: int
+
+
+class SessionRead(ORMModel):
+    id: UUID
+    device_label: Optional[str] = None
+    ip_address: Optional[str] = None
+    last_used_at: Optional[datetime] = None
+    expires_at: datetime
+    current: bool = False
+
+
+class SecurityOverview(ORMModel):
+    password_policy: PasswordPolicyRead
+    mfa: MfaStatus
+    sessions: list[SessionRead] = []
+    last_logins: list[datetime] = []
 
 
 class PermissionSummary(ORMModel):

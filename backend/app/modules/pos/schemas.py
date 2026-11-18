@@ -48,6 +48,8 @@ class PosSaleLineRead(ORMModel):
 class PosSaleCreate(ORMModel):
     session_id: Optional[UUID] = None
     customer_id: Optional[UUID] = None
+    tax_registration_id: Optional[UUID] = None
+    place_of_supply_state_code: Optional[str] = Field(default=None, pattern=r"^[0-9]{2}$")
     payment_method: str = "cash"
     notes: Optional[str] = None
     lines: list[PosSaleLineCreate] = Field(min_length=1)

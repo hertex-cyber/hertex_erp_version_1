@@ -1,5 +1,7 @@
-import { BadgeCheck, ClipboardList, PackageCheck, Receipt, ShoppingCart, Truck } from 'lucide-react'
+import { useState } from 'react'
+import { BadgeCheck, BadgeIndianRupee, ClipboardList, PackageCheck, Receipt, ShoppingCart, Truck } from 'lucide-react'
 import ResourcePage from '../../components/ResourcePage'
+import GSTTaxLinesModal from '../finance/GSTTaxLinesModal'
 import { api, apiErrorMessage } from '../../lib/api'
 import { Money, Primary, Ref, Status, TypeBadge } from '../../components/cells'
 import { dateLabel, today } from '../../lib/format'
@@ -92,7 +94,7 @@ export function PurchaseOrdersPage() {
         received_date: today(),
         notes: 'Received from web console',
       })
-      toast.success('Goods received', `Stock was updated against ${row.po_number}.`)
+      toast.success('Goods received and accrued', `${row.po_number} stock was updated and GRNI posted to the ledger.`)
       reload()
     } catch (error) {
       toast.error('Could not receive goods', apiErrorMessage(error))
@@ -164,6 +166,8 @@ export function PurchaseOrdersPage() {
 
 export function VendorInvoicesPage() {
   const can = useAuth((state) => state.can)
+  const [taxTarget, setTaxTarget] = useState(null)
+  const [reloadList, setReloadList] = useState(null)
 
   const approve = async (row, { reload }) => {
     try {
@@ -176,6 +180,7 @@ export function VendorInvoicesPage() {
   }
 
   return (
+    <>
     <ResourcePage
       eyebrow="Procurement"
       title="Vendor invoices"
@@ -196,6 +201,15 @@ export function VendorInvoicesPage() {
       ]}
       rowActions={[
         {
+          label: 'Manage GST lines',
+          icon: BadgeIndianRupee,
+          show: (row) => can('procurement.vendorinvoice.update') && row.status === 'pending',
+          onClick: (row, { reload }) => {
+            setReloadList(() => reload)
+            setTaxTarget(row)
+          },
+        },
+        {
           label: 'Approve invoice',
           icon: BadgeCheck,
           tone: 'positive',
@@ -215,6 +229,14 @@ export function VendorInvoicesPage() {
         { name: 'notes', label: 'Notes', type: 'textarea', colSpan: 2 },
       ]}
     />
+    <GSTTaxLinesModal
+      open={Boolean(taxTarget)}
+      invoice={taxTarget}
+      invoiceType="vendor"
+      onClose={() => setTaxTarget(null)}
+      onSaved={() => reloadList?.()}
+    />
+    </>
   )
 }
 

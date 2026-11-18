@@ -8,6 +8,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
+from app.core.middleware import SecurityHeadersMiddleware
 from app.db.registry import Base
 from app.db.session import engine
 
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(GZipMiddleware, minimum_size=1024)
+    app.add_middleware(SecurityHeadersMiddleware)
 
     register_exception_handlers(app)
     app.include_router(api_router, prefix=settings.API_V1_STR)

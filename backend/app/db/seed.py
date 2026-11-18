@@ -271,11 +271,16 @@ async def seed_demo(db, tenant: Tenant, admin: User) -> None:
         Account(code="1100", name="Accounts Receivable", account_type="asset", **common),
         Account(code="1200", name="Inventory", account_type="asset", **common),
         Account(code="2000", name="Accounts Payable", account_type="liability", **common),
+        Account(code="2100", name="Goods Received Not Invoiced", account_type="liability", **common),
         Account(code="3000", name="Owner Equity", account_type="equity", **common),
         Account(code="4000", name="Sales Revenue", account_type="income", **common),
         Account(code="5000", name="Cost of Goods Sold", account_type="expense", **common),
         Account(code="5100", name="Rent", account_type="expense", **common),
         Account(code="5200", name="Salaries", account_type="expense", **common),
+        Account(code="2210", name="Provident Fund Payable", account_type="liability", **common),
+        Account(code="2220", name="Employee State Insurance Payable", account_type="liability", **common),
+        Account(code="2230", name="Payroll TDS Payable", account_type="liability", **common),
+        Account(code="2240", name="Net Salaries Payable", account_type="liability", **common),
     ]
     db.add_all(accounts)
     await db.flush()
@@ -365,6 +370,7 @@ async def seed_demo(db, tenant: Tenant, admin: User) -> None:
     project = Project(
         name="Festive Storefront",
         code="PRJ-FEST",
+        number="PRJ-00001",
         description="Seasonal storefront refresh and campaign assets",
         status="active",
         start_date=today - timedelta(days=15),
@@ -378,9 +384,9 @@ async def seed_demo(db, tenant: Tenant, admin: User) -> None:
     await db.flush()
     db.add_all(
         [
-            Task(project_id=project.id, title="Design landing page", status="done", priority="high", estimated_hours=Decimal("24"), actual_hours=Decimal("22"), billable_rate=Decimal("2500"), budget_amount=Decimal("60000"), is_billable=True, **common),
-            Task(project_id=project.id, title="Shoot campaign photography", status="in_progress", priority="high", estimated_hours=Decimal("16"), actual_hours=Decimal("6"), billable_rate=Decimal("3000"), budget_amount=Decimal("48000"), due_date=today + timedelta(days=6), is_billable=True, **common),
-            Task(project_id=project.id, title="Publish social cut-downs", status="todo", priority="medium", estimated_hours=Decimal("12"), billable_rate=Decimal("1800"), budget_amount=Decimal("21600"), due_date=today + timedelta(days=12), is_billable=True, **common),
+            Task(project_id=project.id, title="Design landing page", number="PRJ-T00001", status="done", priority="high", estimated_hours=Decimal("24"), actual_hours=Decimal("22"), billable_rate=Decimal("2500"), budget_amount=Decimal("60000"), is_billable=True, **common),
+            Task(project_id=project.id, title="Shoot campaign photography", number="PRJ-T00002", status="in_progress", priority="high", estimated_hours=Decimal("16"), actual_hours=Decimal("6"), billable_rate=Decimal("3000"), budget_amount=Decimal("48000"), due_date=today + timedelta(days=6), is_billable=True, **common),
+            Task(project_id=project.id, title="Publish social cut-downs", number="PRJ-T00003", status="todo", priority="medium", estimated_hours=Decimal("12"), billable_rate=Decimal("1800"), budget_amount=Decimal("21600"), due_date=today + timedelta(days=12), is_billable=True, **common),
         ]
     )
 

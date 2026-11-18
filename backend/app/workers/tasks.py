@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import date
+from uuid import UUID
 
 from sqlalchemy import func, select
 
@@ -71,6 +72,25 @@ async def _scan_overdue_invoices() -> dict[str, int]:
         await db.commit()
     logger.info("invoices.overdue.scanned", extra={"count": len(invoices)})
     return {"marked_overdue": len(invoices)}
+
+
+@celery_app.task(name="hertex.dispatch_project_outbox", bind=True, max_retries=3)
+def dispatch_project_outbox(self, tenant_id: str, limit: int = 50) -> dict[str, int]:
+    return _run(_dispatch_project_outbox(UUID(str(tenant_id)), limit))
+
+
+async def _dispatch_project_outbox(tenant_id: UUID, limit: int) -> dict[str, int]:
+    from app.db.session import AsyncSessionLocal
+    from app.modules.projects.services import dispatch_outbox
+
+    async with AsyncSessionLocal() as db:
+        result = await dispatch_outbox(db, limit=limit, tenant_id=tenant_id)
+        await db.commit()
+    logger.info(
+        "project.outbox.dispatched",
+        extra={"tenant_id": str(tenant_id), **result},
+    )
+    return result
 
 
 @celery_app.task(name="hertex.process_campaign_send")

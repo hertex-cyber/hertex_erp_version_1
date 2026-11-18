@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, Request
@@ -10,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import decode_token
 from app.db.session import get_db
-from app.modules.identity.models import Role, User
+from app.modules.identity.models import AuthSession, Role, User
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -37,6 +38,24 @@ async def get_current_user(
         raise UnauthorizedError("User not found or inactive")
     if int(payload.get("ver", 0)) != user.token_version:
         raise UnauthorizedError("Session revoked, please sign in again")
+    session_id = payload.get("sid")
+    if session_id:
+        try:
+            session = await db.scalar(
+                select(AuthSession).where(
+                    AuthSession.id == uuid.UUID(str(session_id)),
+                    AuthSession.user_id == user.id,
+                )
+            )
+        except (ValueError, TypeError) as exc:
+            raise UnauthorizedError("Invalid session") from exc
+        if session is None or session.revoked_at is not None:
+            raise UnauthorizedError("Session revoked, please sign in again")
+        expires_at = session.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < datetime.now(timezone.utc):
+            raise UnauthorizedError("Session expired, please sign in again")
     return user
 
 

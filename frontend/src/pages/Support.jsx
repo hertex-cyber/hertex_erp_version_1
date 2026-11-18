@@ -183,7 +183,7 @@ export default function Support() {
                   onClick={() => setTab(status)}
                   className={cn(
                     'flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] font-bold transition',
-                    tab === status ? 'bg-primary text-white' : 'text-muted hover:bg-surface-2 hover:text-ink',
+                    tab === status ? 'bg-primary text-forest' : 'text-muted hover:bg-surface-2 hover:text-ink',
                   )}
                 >
                   {titleCase(status)}
@@ -256,7 +256,7 @@ export default function Support() {
               <form onSubmit={sendReply} className="border-t border-line bg-surface px-4 py-3">
                 <div className="flex items-center justify-between pb-2">
                   <div className="inline-flex rounded-lg border border-line p-0.5">
-                    <button type="button" onClick={() => setInternal(false)} className={cn('rounded-md px-2.5 py-1 text-[10px] font-bold', !internal ? 'bg-primary text-white' : 'text-muted')}>Reply</button>
+                    <button type="button" onClick={() => setInternal(false)} className={cn('rounded-md px-2.5 py-1 text-[10px] font-bold', !internal ? 'bg-primary text-forest' : 'text-muted')}>Reply</button>
                     <button type="button" onClick={() => setInternal(true)} className={cn('inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-bold', internal ? 'bg-amber-500 text-white' : 'text-muted')}>
                       <Lock size={9} /> Note
                     </button>

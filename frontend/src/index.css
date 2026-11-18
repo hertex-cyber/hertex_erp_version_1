@@ -5,25 +5,39 @@
   --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Fraunces", ui-serif, Georgia, serif;
 
-  --color-canvas: #f5f2ec;
-  --color-surface: #fffdfa;
-  --color-surface-2: #faf7f1;
-  --color-ink: #14231d;
-  --color-ink-soft: #405148;
-  --color-muted: #7a877f;
-  --color-line: #e6e0d5;
-  --color-primary: #174f3f;
-  --color-primary-hover: #103d30;
-  --color-primary-soft: #e3efe9;
-  --color-accent: #c25c39;
-  --color-accent-soft: #f8e8e0;
-  --color-gold: #c2953f;
-  --color-gold-soft: #f6eed9;
-  --color-forest: #0d1f19;
-  --color-forest-2: #143229;
+  --color-canvas: #09090b;
+  --color-surface: #111214;
+  --color-surface-2: #020203;
+  --color-ink: #fafafa;
+  --color-ink-soft: #a1a1aa;
+  --color-muted: #a1a1aa;
+  --color-line: #27272a;
+  --color-primary: #ff6900;
+  --color-primary-hover: #e05e00;
+  --color-primary-soft: rgba(255, 105, 0, 0.12);
+  --color-accent: #ff6900;
+  --color-accent-soft: rgba(255, 105, 0, 0.12);
+  --color-gold: #ff6900;
+  --color-gold-soft: rgba(255, 105, 0, 0.12);
+  --color-forest: #09090b;
+  --color-forest-2: #111214;
 
-  --shadow-card: 0 1px 2px rgba(20, 35, 29, 0.04), 0 12px 32px -18px rgba(20, 35, 29, 0.28);
-  --shadow-float: 0 24px 70px -30px rgba(13, 31, 25, 0.55);
+  --color-rose-50: #2a1013;
+  --color-rose-200: #7f1d24;
+  --color-rose-600: #fb7185;
+  --color-rose-700: #fda4af;
+  --color-emerald-50: #052e24;
+  --color-emerald-200: #065f46;
+  --color-emerald-400: #34d399;
+  --color-emerald-600: #34d399;
+  --color-emerald-700: #6ee7b7;
+  --color-amber-50: #2a1b05;
+  --color-amber-200: #92400e;
+  --color-amber-500: #fbbf24;
+  --color-amber-700: #fcd34d;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -18px rgba(0, 0, 0, 0.8);
+  --shadow-float: 0 24px 70px -30px rgba(0, 0, 0, 0.9);
 }
 
 @layer base {
@@ -52,8 +66,8 @@
   }
 
   ::selection {
-    background: #cfe4da;
-    color: #103d30;
+    background: rgba(255, 105, 0, 0.32);
+    color: #fafafa;
   }
 
   ::-webkit-scrollbar {
@@ -62,7 +76,7 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #d6cfc2;
+    background: #3f3f46;
     border: 3px solid transparent;
     background-clip: content-box;
     border-radius: 999px;
@@ -83,7 +97,7 @@
   }
 
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 bg-primary text-white hover:bg-primary-hover active:scale-[0.99];
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 bg-primary text-forest hover:bg-primary-hover active:scale-[0.99];
   }
 
   .btn-secondary {
@@ -95,7 +109,7 @@
   }
 
   .btn-danger {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 bg-rose-600 text-white hover:bg-rose-700;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 bg-[#b91c1c] text-white hover:bg-[#991b1b];
   }
 
   .input {
@@ -128,15 +142,15 @@
   }
 
   .glass {
-    background: rgba(255, 253, 250, 0.82);
+    background: rgba(17, 18, 20, 0.82);
     backdrop-filter: blur(18px);
   }
 
   .forest-grid {
     background-image:
-      radial-gradient(circle at 15% 20%, rgba(194, 149, 63, 0.18), transparent 42%),
-      radial-gradient(circle at 85% 10%, rgba(194, 92, 57, 0.16), transparent 40%),
-      linear-gradient(160deg, #0d1f19 0%, #123328 55%, #0c1b17 100%);
+      radial-gradient(circle at 15% 20%, rgba(255, 105, 0, 0.16), transparent 42%),
+      radial-gradient(circle at 85% 10%, rgba(255, 105, 0, 0.08), transparent 40%),
+      linear-gradient(160deg, #09090b 0%, #111214 55%, #020203 100%);
   }
 }
 
@@ -166,7 +180,7 @@
 .stagger > *:nth-child(6) { animation-delay: 0.22s; }
 
 .shimmer {
-  background: linear-gradient(90deg, #efe9df 25%, #f8f5ef 37%, #efe9df 63%);
+  background: linear-gradient(90deg, #111214 25%, #1c1c1f 37%, #111214 63%);
   background-size: 400% 100%;
   animation: shimmer 1.4s ease infinite;
 }
@@ -178,7 +192,7 @@
 
 .recharts-cartesian-axis-tick-value {
   font-size: 11px;
-  fill: #7a877f;
+  fill: #a1a1aa;
   font-family: var(--font-sans);
 }
 

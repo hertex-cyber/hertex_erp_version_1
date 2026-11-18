@@ -1,79 +1,114 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 import { api } from '../lib/api'
-import { clearTokens, getAccessToken, setTokens } from '../lib/tokens'
+import { clearTokens, getAccessToken, getCsrfToken, hasSessionCookie, setAccessToken } from '../lib/tokens'
 
-export const useAuth = create(
-  persist(
-    (set, get) => ({
-      user: null,
-      permissions: [],
-      roles: [],
-      isSuperuser: false,
-      loading: true,
+const emptySession = {
+  user: null,
+  permissions: [],
+  roles: [],
+  isSuperuser: false,
+}
 
-      login: async (email, password) => {
-        const { data } = await api.post('/auth/login', { email, password })
-        setTokens(data)
-        set({ user: data.user, loading: false })
-        await get().loadPermissions()
-        return data.user
-      },
+function applyTokens(data) {
+  setAccessToken(data.access_token)
+}
 
-      register: async (payload) => {
-        const { data } = await api.post('/auth/register', payload)
-        setTokens(data)
-        set({ user: data.user, loading: false })
-        await get().loadPermissions()
-        return data.user
-      },
+export const useAuth = create((set, get) => ({
+  ...emptySession,
+  loading: true,
 
-      loadPermissions: async () => {
-        const { data } = await api.get('/auth/permissions')
-        set({
-          permissions: data.permissions ?? [],
-          roles: data.roles ?? [],
-          isSuperuser: Boolean(data.is_superuser),
-        })
-      },
+  login: async (email, password) => {
+    const { data } = await api.post('/auth/login', { email, password })
+    if (data.mfa_required) {
+      return {
+        mfaRequired: true,
+        challengeToken: data.challenge_token,
+        expiresIn: data.expires_in,
+      }
+    }
+    applyTokens(data)
+    set({ user: data.user, loading: false })
+    await get().loadPermissions()
+    return { mfaRequired: false, user: data.user }
+  },
 
-      bootstrap: async () => {
-        if (!getAccessToken()) {
-          set({ loading: false, user: null })
-          return
-        }
-        try {
-          const { data } = await api.get('/auth/me')
-          set({ user: data })
-          await get().loadPermissions()
-        } catch {
-          clearTokens()
-          set({ user: null, permissions: [], roles: [], isSuperuser: false })
-        } finally {
-          set({ loading: false })
-        }
-      },
+  verifyMfa: async (challengeToken, code, recoveryCode) => {
+    const payload = { challenge_token: challengeToken }
+    if (recoveryCode) payload.recovery_code = recoveryCode
+    else payload.code = code
+    const { data } = await api.post('/auth/mfa/verify', payload)
+    applyTokens(data)
+    set({ user: data.user, loading: false })
+    await get().loadPermissions()
+    return data.user
+  },
 
-      logout: async () => {
-        try {
-          await api.post('/auth/logout')
-        } catch {
-          // Session may already be gone; clear locally regardless.
-        }
-        clearTokens()
-        set({ user: null, permissions: [], roles: [], isSuperuser: false, loading: false })
-      },
+  register: async (payload) => {
+    const { data } = await api.post('/auth/register', payload)
+    applyTokens(data)
+    set({ user: data.user, loading: false })
+    await get().loadPermissions()
+    return data.user
+  },
 
-      can: (code) => {
-        if (!code) return true
-        const { isSuperuser, permissions, user } = get()
-        if (isSuperuser || user?.is_superuser) return true
-        return permissions.includes(code)
-      },
-    }),
-    {
-      name: 'hertex.auth',
-      partialize: (state) => ({ user: state.user }),
-    },
-  ),
-)
+  loadPermissions: async () => {
+    const { data } = await api.get('/auth/permissions')
+    set({
+      permissions: data.permissions ?? [],
+      roles: data.roles ?? [],
+      isSuperuser: Boolean(data.is_superuser),
+    })
+  },
+
+  bootstrap: async () => {
+    try {
+      if (!hasSessionCookie() && !getAccessToken()) {
+        set({ ...emptySession, loading: false })
+        return
+      }
+      if (!getAccessToken()) {
+        const csrf = getCsrfToken()
+        const { data } = await api.post(
+          '/auth/refresh',
+          {},
+          { headers: csrf ? { 'X-CSRF-Token': csrf } : {} },
+        )
+        applyTokens(data)
+      }
+      const { data } = await api.get('/auth/me')
+      set({ user: data, loading: false })
+      await get().loadPermissions()
+    } catch {
+      clearTokens()
+      set({ ...emptySession, loading: false })
+    }
+  },
+
+  changePassword: async (currentPassword, newPassword) => {
+    const { data } = await api.post('/auth/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    })
+    applyTokens(data)
+    set({ user: data.user })
+    await get().loadPermissions()
+    return data
+  },
+
+  logout: async () => {
+    try {
+      await api.post('/auth/logout')
+    } catch {
+      clearTokens()
+    }
+    clearTokens()
+    set({ ...emptySession, loading: false })
+  },
+
+  can: (code) => {
+    if (!code) return true
+    const { isSuperuser, permissions, user } = get()
+    if (isSuperuser || user?.is_superuser) return true
+    return permissions.includes(code)
+  },
+}))

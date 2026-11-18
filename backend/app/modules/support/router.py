@@ -21,6 +21,7 @@ from app.modules.support.schemas import (
     TicketRead,
     TicketUpdate,
 )
+from app.modules.support.service import PROJECT_WORK_TAGS, ensure_project_work_item
 
 router = APIRouter(prefix="/support")
 
@@ -28,6 +29,23 @@ router = APIRouter(prefix="/support")
 def _include(**kwargs):
     child, _ = build_crud_router(module="support", **kwargs)
     router.include_router(child)
+
+
+def _needs_project_work(ticket: Ticket) -> bool:
+    if ticket.needs_project_work:
+        return True
+    text = f"{ticket.subject}\n{ticket.description or ''}".lower()
+    return any(tag in text for tag in PROJECT_WORK_TAGS)
+
+
+async def ticket_created(db, user, ticket, data, request):
+    if _needs_project_work(ticket):
+        await ensure_project_work_item(db, user, ticket)
+
+
+async def ticket_updated(db, user, ticket, data, request):
+    if data.get("needs_project_work") is True or _needs_project_work(ticket):
+        await ensure_project_work_item(db, user, ticket)
 
 
 _include(
@@ -44,6 +62,8 @@ _include(
     load_options=(selectinload(Ticket.messages),),
     number_field="ticket_number",
     number_prefix="TKT",
+    after_create=ticket_created,
+    after_update=ticket_updated,
 )
 
 

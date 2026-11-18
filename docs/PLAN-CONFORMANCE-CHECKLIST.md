@@ -188,13 +188,15 @@ Note: the event names this sprint depends on are **already published** (`order.c
 |---|---|
 | Order Management | ✅ `sales/` |
 | Customer Support / Helpdesk | ✅ `support/` (Ticket, TicketMessage, event on message create) |
-| Project & Work Management | ✅ `projects/` (Project, Task) — light, not the money-aware WorkItem design |
+| Project & Work Management (09a) | ✅ implemented / complete — 353 PM routes, 62 backend tests passing, frontend build + 15 tests passing, Alembic head `f4e2c8a7b913`, PM schema drift clean; OpenAPI PM snapshot checked (see note below) |
 | Settings / number sequences | ✅ `settings/` (AppSetting, NumberSequence) |
 | GST / e-invoicing (IRN, e-way bill, GSTR) | ❌ `Product.hsn_code`, `tax_rate` fields only |
 | Asset Management | ❌ |
 | Document Management | ❌ |
 | LMS | ❌ |
 | Manufacturing | ❌ (intentionally deferred by plan) |
+
+> **09a verification note (2026-11-18):** `alembic check` reports no Project Management drift. The remaining drift is unrelated, non-PM work: `finance_approvals`, `finance_vendor_payments`, `procurement_vendor_invoices`, and `sales_order_lines`. It is tracked separately and is not an 09a failure. The PM contract snapshot is `backend/openapi-project-management.json`, verified by `backend/scripts/check_openapi_snapshot.py` (349 distinct PM operations; no breaking changes).
 
 ---
 

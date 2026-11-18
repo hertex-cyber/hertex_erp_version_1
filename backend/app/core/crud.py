@@ -5,19 +5,19 @@ tenant isolation and audit logging without copying boilerplate.
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, Uuid, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import record_audit
 from app.core.deps import require_permissions
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.core.schemas import Page
 from app.db.session import get_db
 from app.modules.identity.models import User
@@ -49,6 +49,7 @@ class CRUDService:
         soft_delete: bool = True,
         number_field: Optional[str] = None,
         number_prefix: Optional[str] = None,
+        immutable: bool = False,
     ):
         self.model = model
         self.search_fields = search_fields
@@ -57,6 +58,7 @@ class CRUDService:
         self.soft_delete = soft_delete
         self.number_field = number_field
         self.number_prefix = number_prefix
+        self.immutable = immutable
 
     def base_select(self, user: User) -> Select:
         stmt = select(self.model)
@@ -105,6 +107,8 @@ class CRUDService:
             if field not in self.filter_fields or value in (None, ""):
                 continue
             column = getattr(self.model, field)
+            if isinstance(column.type, Uuid):
+                value = coerce_identifier(value, field)
             if isinstance(value, str) and value.lower() in {"true", "false"}:
                 column = column.is_(value.lower() == "true")
             stmt = stmt.where(column == value)
@@ -137,6 +141,8 @@ class CRUDService:
         return obj
 
     async def update(self, db: AsyncSession, user: User, item_id: Any, data: dict[str, Any]) -> Any:
+        if self.immutable:
+            raise ForbiddenError(f"{self.model.__name__} records are immutable")
         obj = await self.get(db, user, item_id)
         for field, value in data.items():
             if hasattr(obj, field):
@@ -145,6 +151,8 @@ class CRUDService:
         return obj
 
     async def delete(self, db: AsyncSession, user: User, item_id: Any) -> None:
+        if self.immutable:
+            raise ForbiddenError(f"{self.model.__name__} records are immutable")
         obj = await self.get(db, user, item_id)
         if self.soft_delete and hasattr(obj, "is_active"):
             obj.is_active = False
@@ -170,6 +178,21 @@ def build_crud_router(
     soft_delete: bool = True,
     number_field: Optional[str] = None,
     number_prefix: Optional[str] = None,
+    serializer: Optional[Callable[[Any, User], dict[str, Any]]] = None,
+    base_path: str = "",
+    create_enabled: bool = True,
+    update_enabled: bool = True,
+    delete_enabled: bool = True,
+    immutable: bool = False,
+    update_guard: Optional[Callable[[AsyncSession, User, Any, dict[str, Any]], Awaitable[None]]] = None,
+    delete_guard: Optional[Callable[[AsyncSession, User, Any], Awaitable[None]]] = None,
+    idempotency_hooks: Optional[tuple[Callable, Callable]] = None,
+    after_create: Optional[
+        Callable[[AsyncSession, User, Any, dict[str, Any], Request], Awaitable[None]]
+    ] = None,
+    after_update: Optional[
+        Callable[[AsyncSession, User, Any, dict[str, Any], Request], Awaitable[None]]
+    ] = None,
 ) -> tuple[APIRouter, CRUDService]:
     router = APIRouter(prefix=prefix, tags=list(tags))
     service = CRUDService(
@@ -180,6 +203,7 @@ def build_crud_router(
         soft_delete=soft_delete,
         number_field=number_field,
         number_prefix=number_prefix,
+        immutable=immutable,
     )
 
     read_dep = require_permissions(f"{permission_prefix}.read")
@@ -189,7 +213,7 @@ def build_crud_router(
 
     PageSchema = Page[read_schema]  # type: ignore[valid-type]
 
-    @router.get("", response_model=PageSchema)
+    @router.get(base_path, response_model=PageSchema)
     async def list_items(
         request: Request,
         page: int = Query(1, ge=1),
@@ -213,6 +237,8 @@ def build_crud_router(
             filters=filters,
             include_inactive=include_inactive,
         )
+        if serializer:
+            items = [serializer(item, user) for item in items]
         return {
             "items": items,
             "total": total,
@@ -221,32 +247,45 @@ def build_crud_router(
             "pages": max(1, math.ceil(total / size)),
         }
 
-    @router.post("", response_model=read_schema, status_code=201)
-    async def create_item(
-        payload: create_schema,  # type: ignore[valid-type]
-        request: Request,
-        user: User = Depends(create_dep),
-        db: AsyncSession = Depends(get_db),
-    ):
-        data = payload.model_dump(exclude_unset=True)
-        try:
-            obj = await service.create(db, user, data)
-            await record_audit(
-                db,
-                user=user,
-                action="create",
-                module=module,
-                entity=entity,
-                entity_id=getattr(obj, "id", None),
-                changes=data,
-                request=request,
-            )
-            await db.commit()
-            await db.refresh(obj)
-            return obj
-        except IntegrityError as exc:
-            await db.rollback()
-            raise ConflictError(f"{entity} conflicts with an existing record") from exc
+    if create_enabled:
+        @router.post(base_path, response_model=read_schema, status_code=201)
+        async def create_item(
+            payload: create_schema,  # type: ignore[valid-type]
+            request: Request,
+            user: User = Depends(create_dep),
+            db: AsyncSession = Depends(get_db),
+        ):
+            data = payload.model_dump(exclude_unset=True)
+            idempotency_key = request.headers.get("idempotency-key")
+            scope = f"{request.method}:{request.url.path}"
+            if idempotency_key and idempotency_hooks:
+                cached = await idempotency_hooks[0](db, user, scope, idempotency_key)
+                if cached is not None:
+                    return cached["response"]
+            try:
+                obj = await service.create(db, user, data)
+                await record_audit(
+                    db,
+                    user=user,
+                    action="create",
+                    module=module,
+                    entity=entity,
+                    entity_id=getattr(obj, "id", None),
+                    changes=data,
+                    request=request,
+                )
+                await db.commit()
+                await db.refresh(obj)
+                if after_create is not None:
+                    await after_create(db, user, obj, data, request)
+                result = serializer(obj, user) if serializer else obj
+                if idempotency_key and idempotency_hooks:
+                    await idempotency_hooks[1](db, user, scope, idempotency_key, result, 201)
+                    await db.commit()
+                return result
+            except IntegrityError as exc:
+                await db.rollback()
+                raise ConflictError(f"{entity} conflicts with an existing record") from exc
 
     @router.get("/{item_id}", response_model=read_schema)
     async def get_item(
@@ -254,54 +293,78 @@ def build_crud_router(
         user: User = Depends(read_dep),
         db: AsyncSession = Depends(get_db),
     ):
-        return await service.get(db, user, item_id)
+        obj = await service.get(db, user, item_id)
+        return serializer(obj, user) if serializer else obj
 
-    @router.patch("/{item_id}", response_model=read_schema)
-    async def update_item(
-        item_id: str,
-        payload: update_schema,  # type: ignore[valid-type]
-        request: Request,
-        user: User = Depends(update_dep),
-        db: AsyncSession = Depends(get_db),
-    ):
-        data = payload.model_dump(exclude_unset=True)
-        try:
-            obj = await service.update(db, user, item_id, data)
+    if update_enabled:
+        @router.patch("/{item_id}", response_model=read_schema)
+        async def update_item(
+            item_id: str,
+            payload: update_schema,  # type: ignore[valid-type]
+            request: Request,
+            user: User = Depends(update_dep),
+            db: AsyncSession = Depends(get_db),
+        ):
+            data = payload.model_dump(exclude_unset=True)
+            idempotency_key = request.headers.get("idempotency-key")
+            scope = f"{request.method}:{request.url.path}"
+            if idempotency_key and idempotency_hooks:
+                cached = await idempotency_hooks[0](db, user, scope, idempotency_key)
+                if cached is not None:
+                    return cached["response"]
+            try:
+                if update_guard:
+                    raw_body: dict[str, Any] = {}
+                    try:
+                        raw_body = await request.json()
+                    except Exception:
+                        raw_body = {}
+                    await update_guard(db, user, item_id, raw_body if isinstance(raw_body, dict) else {})
+                obj = await service.update(db, user, item_id, data)
+                await record_audit(
+                    db,
+                    user=user,
+                    action="update",
+                    module=module,
+                    entity=entity,
+                    entity_id=item_id,
+                    changes=data,
+                    request=request,
+                )
+                await db.commit()
+                await db.refresh(obj)
+                if after_update is not None:
+                    await after_update(db, user, obj, data, request)
+                result = serializer(obj, user) if serializer else obj
+                if idempotency_key and idempotency_hooks:
+                    await idempotency_hooks[1](db, user, scope, idempotency_key, result, 200)
+                    await db.commit()
+                return result
+            except IntegrityError as exc:
+                await db.rollback()
+                raise ConflictError(f"{entity} conflicts with an existing record") from exc
+
+    if delete_enabled:
+        @router.delete("/{item_id}")
+        async def delete_item(
+            item_id: str,
+            request: Request,
+            user: User = Depends(delete_dep),
+            db: AsyncSession = Depends(get_db),
+        ):
+            if delete_guard:
+                await delete_guard(db, user, item_id)
+            await service.delete(db, user, item_id)
             await record_audit(
                 db,
                 user=user,
-                action="update",
+                action="delete",
                 module=module,
                 entity=entity,
                 entity_id=item_id,
-                changes=data,
                 request=request,
             )
             await db.commit()
-            await db.refresh(obj)
-            return obj
-        except IntegrityError as exc:
-            await db.rollback()
-            raise ConflictError(f"{entity} conflicts with an existing record") from exc
-
-    @router.delete("/{item_id}")
-    async def delete_item(
-        item_id: str,
-        request: Request,
-        user: User = Depends(delete_dep),
-        db: AsyncSession = Depends(get_db),
-    ):
-        await service.delete(db, user, item_id)
-        await record_audit(
-            db,
-            user=user,
-            action="delete",
-            module=module,
-            entity=entity,
-            entity_id=item_id,
-            request=request,
-        )
-        await db.commit()
-        return {"message": f"{entity} deleted"}
+            return {"message": f"{entity} deleted"}
 
     return router, service

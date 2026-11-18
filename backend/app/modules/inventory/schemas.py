@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.core.schemas import ORMModel
 
@@ -43,6 +43,7 @@ class ProductBase(ORMModel):
     sale_price: Decimal = Decimal("0")
     purchase_price: Decimal = Decimal("0")
     tax_rate: Decimal = Decimal("0")
+    tax_code_id: Optional[UUID] = None
     reorder_level: Decimal = Decimal("0")
     barcode: Optional[str] = None
     hsn_code: Optional[str] = None
@@ -61,6 +62,7 @@ class ProductUpdate(ORMModel):
     sale_price: Optional[Decimal] = None
     purchase_price: Optional[Decimal] = None
     tax_rate: Optional[Decimal] = None
+    tax_code_id: Optional[UUID] = None
     reorder_level: Optional[Decimal] = None
     barcode: Optional[str] = None
     hsn_code: Optional[str] = None
@@ -77,6 +79,7 @@ class ProductRead(ORMModel):
     sale_price: Decimal
     purchase_price: Decimal
     tax_rate: Decimal
+    tax_code_id: Optional[UUID] = None
     reorder_level: Decimal
     barcode: Optional[str] = None
     hsn_code: Optional[str] = None
@@ -90,7 +93,7 @@ class StockMoveBase(ORMModel):
     warehouse_id: Optional[UUID] = None
     bin_id: Optional[UUID] = None
     movement_type: str = "adjustment"
-    quantity: Decimal
+    quantity: Decimal = Field(max_digits=14, decimal_places=3)
     unit_cost: Decimal = Decimal("0")
     reason: Optional[str] = None
     reference: Optional[str] = None
@@ -112,13 +115,47 @@ class StockMoveRead(ORMModel):
     warehouse_id: Optional[UUID] = None
     bin_id: Optional[UUID] = None
     movement_type: str
+    status: str
+    movement_date: Optional[date] = None
     quantity: Decimal
     unit_cost: Decimal
     reason: Optional[str] = None
     reference: Optional[str] = None
+    journal_entry_id: Optional[UUID] = None
+    idempotency_key: Optional[str] = None
     is_active: bool
     created_at: datetime
     product: Optional[ProductRead] = None
+
+
+class InventoryAdjustmentCreate(ORMModel):
+    product_id: UUID
+    warehouse_id: Optional[UUID] = None
+    bin_id: Optional[UUID] = None
+    quantity: Decimal
+    unit_cost: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    adjustment_date: date = Field(default_factory=date.today)
+    reason: str = Field(min_length=3, max_length=255)
+    reference: Optional[str] = Field(default=None, max_length=120)
+
+    @field_validator("quantity")
+    @classmethod
+    def validate_quantity(cls, value: Decimal) -> Decimal:
+        if (
+            not value.is_finite()
+            or value == 0
+            or value != value.quantize(Decimal("0.001"))
+        ):
+            raise ValueError("Adjustment quantity must be non-zero with at most three decimal places")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 3:
+            raise ValueError("A clear adjustment reason is required")
+        return normalized
 
 
 class StockLevel(ORMModel):

@@ -13,11 +13,18 @@ from app.core.audit import record_audit
 from app.core.crud import build_crud_router
 from app.core.deps import require_permissions
 from app.core.events import publish
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.numbering import next_number
 from app.core.schemas import Page
 from app.db.session import get_db
+from app.modules.finance.models import Invoice, InvoiceTaxLine, TaxRegistration
+from app.modules.finance.service import (
+    calculate_tax_snapshot,
+    post_invoice_journal,
+    tenant_has_gst_setup,
+)
 from app.modules.identity.models import User
+from app.modules.inventory.models import Product
 from app.modules.sales.models import Customer, DeliveryChallan, SalesOrder, SalesOrderLine
 from app.modules.sales.schemas import (
     CustomerCreate,
@@ -88,8 +95,8 @@ async def _load_order(db: AsyncSession, user: User, order_id) -> SalesOrder:
 
 
 def _price_line(line: SalesOrderLineCreate) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    base = Decimal(line.quantity) * Decimal(line.unit_price)
-    discount = Decimal(line.discount or 0)
+    base = (Decimal(line.quantity) * Decimal(line.unit_price)).quantize(Decimal("0.01"))
+    discount = Decimal(line.discount or 0).quantize(Decimal("0.01"))
     taxable = base - discount
     tax = (taxable * Decimal(line.tax_rate or 0) / Decimal("100")).quantize(Decimal("0.01"))
     return base, discount, tax, taxable + tax
@@ -157,12 +164,97 @@ async def create_order(
     discount_total = Decimal("0")
     tax_total = Decimal("0")
     computed_lines = []
+    gst_enabled = await tenant_has_gst_setup(db, user.tenant_id)
+    tax_registration_id = payload.tax_registration_id
+    place_of_supply = payload.place_of_supply_state_code
+    registration = None
+    if gst_enabled:
+        if user.tenant_id is None:
+            raise ValidationError("A tenant must be selected for GST sales")
+        registration_stmt = select(TaxRegistration).where(
+            TaxRegistration.tenant_id == user.tenant_id,
+            TaxRegistration.is_active.is_(True),
+        )
+        if tax_registration_id:
+            registration_stmt = registration_stmt.where(
+                TaxRegistration.id == tax_registration_id
+            )
+        else:
+            registration_stmt = registration_stmt.where(TaxRegistration.is_default.is_(True))
+        registration = await db.scalar(registration_stmt)
+        if registration is None and tax_registration_id is None:
+            active_registrations = list(
+                (
+                    await db.scalars(
+                        select(TaxRegistration).where(
+                            TaxRegistration.tenant_id == user.tenant_id,
+                            TaxRegistration.is_active.is_(True),
+                        )
+                    )
+                ).all()
+            )
+            if len(active_registrations) == 1:
+                registration = active_registrations[0]
+        if registration is None:
+            raise ValidationError("Select an active GST registration for this sales order")
+        tax_registration_id = registration.id
+        if place_of_supply is None and payload.customer_id is not None:
+            customer = await db.scalar(
+                select(Customer).where(
+                    Customer.id == payload.customer_id,
+                    Customer.tenant_id == user.tenant_id,
+                )
+            )
+            if customer is None:
+                raise NotFoundError("Customer not found")
+            if customer.gstin:
+                if len(customer.gstin) < 2 or not customer.gstin[:2].isdigit():
+                    raise ValidationError("Customer GSTIN has an invalid state-code prefix")
+                place_of_supply = customer.gstin[:2]
+        place_of_supply = place_of_supply or registration.state_code
+
     for line in payload.lines:
-        base, discount, tax, line_total = _price_line(line)
+        base = (Decimal(line.quantity) * Decimal(line.unit_price)).quantize(Decimal("0.01"))
+        discount = Decimal(line.discount or 0).quantize(Decimal("0.01"))
+        taxable = base - discount
+        if taxable < 0:
+            raise ValidationError("Line discount cannot exceed the line amount")
+        tax_snapshot = None
+        if gst_enabled:
+            tax_code_id = line.tax_code_id
+            if tax_code_id is None:
+                product_stmt = select(Product).where(
+                    Product.id == line.product_id,
+                    Product.tenant_id == user.tenant_id,
+                    Product.is_active.is_(True),
+                )
+                product = await db.scalar(product_stmt)
+                tax_code_id = product.tax_code_id if product else None
+            if tax_code_id is None:
+                raise ValidationError("Select a GST tax code for every sales order line")
+            tax_snapshot = await calculate_tax_snapshot(
+                db,
+                user.tenant_id,
+                tax_code_id=tax_code_id,
+                registration_id=tax_registration_id,
+                place_of_supply_state_code=place_of_supply,
+                taxable_amount=taxable.quantize(Decimal("0.01")),
+                description=line.description,
+            )
+            tax = (
+                tax_snapshot["cgst_amount"]
+                + tax_snapshot["sgst_amount"]
+                + tax_snapshot["igst_amount"]
+            )
+        else:
+            if line.tax_code_id is not None:
+                raise ValidationError("Configure a GST registration before using GST tax codes")
+            _, _, tax, _ = _price_line(line)
+        line_total = taxable + tax
         subtotal += base
         discount_total += discount
         tax_total += tax
-        computed_lines.append((line, line_total))
+        computed_lines.append((line, line_total, tax_snapshot))
 
     order = SalesOrder(
         tenant_id=user.tenant_id,
@@ -174,6 +266,8 @@ async def create_order(
         status="confirmed",
         notes=payload.notes,
         warehouse_id=payload.warehouse_id,
+        tax_registration_id=tax_registration_id,
+        place_of_supply_state_code=place_of_supply,
         subtotal=subtotal,
         discount=discount_total,
         tax=tax_total,
@@ -181,7 +275,7 @@ async def create_order(
     )
     db.add(order)
     await db.flush()
-    for line, line_total in computed_lines:
+    for line, line_total, tax_snapshot in computed_lines:
         db.add(
             SalesOrderLine(
                 tenant_id=user.tenant_id,
@@ -192,7 +286,25 @@ async def create_order(
                 quantity=line.quantity,
                 unit_price=line.unit_price,
                 discount=line.discount,
-                tax_rate=line.tax_rate,
+                tax_rate=(
+                    tax_snapshot["cgst_rate"]
+                    + tax_snapshot["sgst_rate"]
+                    + tax_snapshot["igst_rate"]
+                    if tax_snapshot
+                    else line.tax_rate
+                ),
+                tax_code_id=tax_snapshot["tax_code_id"] if tax_snapshot else line.tax_code_id,
+                cgst_amount=tax_snapshot["cgst_amount"] if tax_snapshot else Decimal("0"),
+                sgst_amount=tax_snapshot["sgst_amount"] if tax_snapshot else Decimal("0"),
+                igst_amount=tax_snapshot["igst_amount"] if tax_snapshot else Decimal("0"),
+                cgst_rate_snapshot=tax_snapshot["cgst_rate"] if tax_snapshot else Decimal("0"),
+                sgst_rate_snapshot=tax_snapshot["sgst_rate"] if tax_snapshot else Decimal("0"),
+                igst_rate_snapshot=tax_snapshot["igst_rate"] if tax_snapshot else Decimal("0"),
+                tax_type_snapshot=tax_snapshot["tax_type_snapshot"] if tax_snapshot else None,
+                can_claim_itc_snapshot=tax_snapshot["can_claim_itc_snapshot"] if tax_snapshot else None,
+                output_cgst_account_id=tax_snapshot["output_cgst_account_id"] if tax_snapshot else None,
+                output_sgst_account_id=tax_snapshot["output_sgst_account_id"] if tax_snapshot else None,
+                output_igst_account_id=tax_snapshot["output_igst_account_id"] if tax_snapshot else None,
                 line_total=line_total,
             )
         )
@@ -242,8 +354,6 @@ async def fulfill_order(
     user: User = Depends(fulfill_orders),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.modules.finance.models import Invoice
-    from app.modules.finance.service import post_invoice_journal
     from app.modules.inventory.models import Product, StockMove
     from app.modules.warehouse.models import Warehouse
 
@@ -302,6 +412,34 @@ async def fulfill_order(
     )
     db.add(invoice)
     await db.flush()
+    for order_line in order.lines:
+        if order_line.tax_code_id is None:
+            continue
+        db.add(
+            InvoiceTaxLine(
+                tenant_id=user.tenant_id,
+                created_by_id=user.id,
+                invoice_id=invoice.id,
+                tax_code_id=order_line.tax_code_id,
+                tax_type_snapshot=order_line.tax_type_snapshot or "taxable",
+                can_claim_itc_snapshot=order_line.can_claim_itc_snapshot or False,
+                registration_id=order.tax_registration_id,
+                description=order_line.description,
+                place_of_supply_state_code=order.place_of_supply_state_code,
+                taxable_amount=(
+                    order_line.quantity * order_line.unit_price - order_line.discount
+                ).quantize(Decimal("0.01")),
+                cgst_rate=order_line.cgst_rate_snapshot,
+                sgst_rate=order_line.sgst_rate_snapshot,
+                igst_rate=order_line.igst_rate_snapshot,
+                cgst_amount=order_line.cgst_amount,
+                sgst_amount=order_line.sgst_amount,
+                igst_amount=order_line.igst_amount,
+                output_cgst_account_id=order_line.output_cgst_account_id,
+                output_sgst_account_id=order_line.output_sgst_account_id,
+                output_igst_account_id=order_line.output_igst_account_id,
+            )
+        )
     await post_invoice_journal(db, user, invoice)
 
     await record_audit(

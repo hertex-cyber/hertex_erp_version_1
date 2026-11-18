@@ -9,6 +9,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Search,
+  Shield,
   Sparkles,
   X,
 } from 'lucide-react'
@@ -20,7 +21,7 @@ import { Avatar, Modal } from './ui'
 function Brand({ compact = false }) {
   return (
     <Link to="/" className={cn('flex items-center gap-3', compact && 'justify-center')}>
-      <span className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gold text-[15px] font-extrabold text-forest shadow-[0_6px_18px_-8px_rgba(194,149,63,0.9)]">
+      <span className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gold text-[15px] font-extrabold text-forest shadow-[0_6px_18px_-8px_rgba(255,105,0,0.9)]">
         H
         <span className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/25" />
       </span>
@@ -168,6 +169,13 @@ function MiniProfile({ collapsed }) {
             <p className="truncate text-xs font-bold text-ink">{user?.email}</p>
             <p className="mt-0.5 text-[10px] text-muted">Signed in to Hertex ERP</p>
           </div>
+          <button
+            type="button"
+            className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-ink-soft transition hover:bg-surface-2 hover:text-ink"
+            onClick={() => { setOpen(false); navigate('/settings/security') }}
+          >
+            <Shield size={14} /> Security settings
+          </button>
           <button type="button" className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-rose-600 transition hover:bg-rose-50" onClick={signOut}>
             <LogOut size={14} /> Sign out
           </button>

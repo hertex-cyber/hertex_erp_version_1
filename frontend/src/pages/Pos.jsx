@@ -46,7 +46,7 @@ function ProductCard({ product, onAdd }) {
       <p className="mt-0.5 text-[10px] text-muted">{product.sku} · {product.uom}</p>
       <div className="mt-3 flex items-center justify-between">
         <span className="font-bold tabular-nums text-ink">{money(product.sale_price)}</span>
-        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-primary-soft text-primary transition group-hover:bg-primary group-hover:text-white">
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-primary-soft text-primary transition group-hover:bg-primary group-hover:text-forest">
           <Plus size={14} />
         </span>
       </div>
@@ -352,7 +352,7 @@ export default function Pos() {
                     onClick={() => setPayment(method.key)}
                     className={cn(
                       'flex flex-col items-center gap-1 rounded-xl border px-1 py-2 text-[10px] font-bold transition',
-                      payment === method.key ? 'border-primary bg-primary text-white' : 'border-line bg-surface text-muted hover:bg-surface-2 hover:text-ink',
+                      payment === method.key ? 'border-primary bg-primary text-forest' : 'border-line bg-surface text-muted hover:bg-surface-2 hover:text-ink',
                     )}
                   >
                     <method.icon size={14} />

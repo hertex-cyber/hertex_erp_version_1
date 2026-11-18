@@ -51,6 +51,7 @@ export function ProductsPage() {
         { key: 'sale_price', label: 'Sale price', align: 'right', render: (row) => <Money value={row.sale_price} /> },
         { key: 'purchase_price', label: 'Cost', align: 'right', render: (row) => <Money value={row.purchase_price} /> },
         { key: 'tax_rate', label: 'Tax', align: 'right', render: (row) => `${num(row.tax_rate, 1)}%` },
+        { key: 'tax_code_id', label: 'GST tax code', render: (row) => row.tax_code_id ? <Ref lookup="taxCodes" id={row.tax_code_id} /> : <TypeBadge value="not mapped" /> },
         { key: 'reorder_level', label: 'Reorder at', align: 'right', render: (row) => <Qty value={row.reorder_level} /> },
         { key: 'is_active', label: 'Status', render: (row) => <Status value={row.is_active ? 'active' : 'inactive'} /> },
       ]}
@@ -62,6 +63,7 @@ export function ProductsPage() {
         { name: 'sale_price', label: 'Sale price', type: 'number', default: 0 },
         { name: 'purchase_price', label: 'Purchase price', type: 'number', default: 0 },
         { name: 'tax_rate', label: 'Tax rate %', type: 'number', default: 0 },
+        { name: 'tax_code_id', label: 'GST tax code', type: 'reference', lookup: 'taxCodes', help: 'Required for sales when GST registrations are configured.' },
         { name: 'reorder_level', label: 'Reorder level', type: 'number', default: 0 },
         { name: 'barcode', label: 'Barcode' },
         { name: 'hsn_code', label: 'HSN code' },
@@ -78,13 +80,18 @@ export function StockMovesPage() {
       title="Stock movements"
       description="Every receipt, sale, adjustment and transfer — the audit trail of inventory."
       endpoint="/inventory/stock-moves"
+      createEndpoint="/inventory/stock-adjustments"
       permission="inventory.stockmove"
-      createLabel="Record movement"
+      createLabel="Submit adjustment"
+      requireIdempotencyKey
+      canEdit={false}
+      canDelete={false}
       searchPlaceholder="Search reason, reference…"
       filters={[{ name: 'movement_type', label: 'All movement types', options: MOVEMENT_TYPES }]}
       columns={[
         { key: 'product_id', label: 'Product', render: (row) => <Ref lookup="products" id={row.product_id} /> },
         { key: 'movement_type', label: 'Type', render: (row) => <TypeBadge value={row.movement_type} /> },
+        { key: 'status', label: 'Approval', render: (row) => <TypeBadge value={row.status === 'pending_approval' ? 'pending approval' : row.status} /> },
         {
           key: 'quantity',
           label: 'Quantity',
@@ -97,18 +104,19 @@ export function StockMovesPage() {
         },
         { key: 'warehouse_id', label: 'Warehouse', render: (row) => <Ref lookup="warehouses" id={row.warehouse_id} /> },
         { key: 'unit_cost', label: 'Unit cost', align: 'right', render: (row) => <Money value={row.unit_cost} /> },
+        { key: 'journal_entry_id', label: 'Journal', render: (row) => row.journal_entry_id ? <span className="font-mono text-xs" title={row.journal_entry_id}>{row.journal_entry_id.slice(0, 8)}</span> : <TypeBadge value="unposted" /> },
         { key: 'reference', label: 'Reference' },
         { key: 'created_at', label: 'When', render: (row) => <DateCell value={row.created_at} /> },
       ]}
       fields={[
         { name: 'product_id', label: 'Product', type: 'reference', lookup: 'products', required: true },
-        { name: 'movement_type', label: 'Movement type', type: 'select', options: MOVEMENT_TYPES, default: 'receipt', required: true },
-        { name: 'quantity', label: 'Quantity (negative to remove)', type: 'number', required: true, help: 'Use a positive number for receipts and a negative number for issues.' },
-        { name: 'unit_cost', label: 'Unit cost', type: 'number', default: 0 },
+        { name: 'adjustment_date', label: 'Posting date', type: 'date', default: 'today', required: true },
+        { name: 'quantity', label: 'Quantity adjustment', type: 'number', required: true, help: 'Positive increases stock; negative decreases stock.' },
+        { name: 'unit_cost', label: 'Unit cost', type: 'number', required: true, help: 'The per-unit valuation used for the inventory journal.' },
         { name: 'warehouse_id', label: 'Warehouse', type: 'reference', lookup: 'warehouses' },
         { name: 'bin_id', label: 'Bin', type: 'reference', lookup: 'bins' },
         { name: 'reference', label: 'Reference' },
-        { name: 'reason', label: 'Reason', type: 'textarea', colSpan: 2 },
+        { name: 'reason', label: 'Adjustment reason', type: 'textarea', required: true, colSpan: 2 },
       ]}
     />
   )

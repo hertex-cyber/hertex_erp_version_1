@@ -54,8 +54,8 @@ export function Ref({ lookup, id, fallback = '—' }) {
   return <span className="text-ink-soft">{label}</span>
 }
 
-export function Money({ value, precise = false, className = '' }) {
-  return <span className={`font-semibold tabular-nums text-ink ${className}`}>{money(value, { precise })}</span>
+export function Money({ value, precise = false, currency = 'INR', restricted = false, className = '' }) {
+  return <span className={`font-semibold tabular-nums text-ink ${className}`}>{money(value, { precise, currency, restricted })}</span>
 }
 
 export function Qty({ value, className = '' }) {

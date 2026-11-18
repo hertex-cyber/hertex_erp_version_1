@@ -5,7 +5,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,11 +13,16 @@ from app.core.audit import record_audit
 from app.core.crud import build_crud_router
 from app.core.deps import require_permissions
 from app.core.events import publish
-from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from app.core.numbering import next_number
 from app.core.schemas import Page
 from app.db.session import get_db
-from app.modules.finance.service import post_vendor_invoice_journal
+from app.modules.finance.service import (
+    calculate_tax_snapshot,
+    post_goods_receipt_accrual,
+    post_vendor_invoice_journal,
+    tax_line_totals,
+)
 from app.modules.identity.models import User
 from app.modules.procurement.models import (
     GoodsReceipt,
@@ -27,6 +32,7 @@ from app.modules.procurement.models import (
     PurchaseRequisition,
     Vendor,
     VendorInvoice,
+    VendorInvoiceTaxLine,
 )
 from app.modules.procurement.schemas import (
     GoodsReceiptCreate,
@@ -39,6 +45,8 @@ from app.modules.procurement.schemas import (
     VendorCreate,
     VendorInvoiceCreate,
     VendorInvoiceRead,
+    VendorInvoiceTaxLineRead,
+    VendorInvoiceTaxLinesUpdate,
     VendorInvoiceUpdate,
     VendorRead,
     VendorUpdate,
@@ -97,7 +105,9 @@ create_pos = require_permissions("procurement.purchaseorder.create")
 update_pos = require_permissions("procurement.purchaseorder.update")
 
 
-async def _load_po(db: AsyncSession, user: User, po_id) -> PurchaseOrder:
+async def _load_po(
+    db: AsyncSession, user: User, po_id, *, for_update: bool = False
+) -> PurchaseOrder:
     stmt = (
         select(PurchaseOrder)
         .options(selectinload(PurchaseOrder.vendor), selectinload(PurchaseOrder.lines))
@@ -105,6 +115,8 @@ async def _load_po(db: AsyncSession, user: User, po_id) -> PurchaseOrder:
     )
     if not user.is_superuser and user.tenant_id:
         stmt = stmt.where(PurchaseOrder.tenant_id == user.tenant_id)
+    if for_update:
+        stmt = stmt.with_for_update()
     po = await db.scalar(stmt)
     if po is None:
         raise NotFoundError("Purchase order not found")
@@ -242,12 +254,14 @@ async def receive_purchase_order(
     user: User = Depends(require_permissions("procurement.grn.create")),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.modules.inventory.models import Product, StockMove
+    from app.modules.inventory.models import StockMove
     from app.modules.warehouse.models import Warehouse
 
-    po = await _load_po(db, user, po_id)
+    po = await _load_po(db, user, po_id, for_update=True)
     if po.status not in {"approved", "received", "partially_received"}:
         raise ConflictError("Purchase order must be approved before receiving")
+    if all(line.received_quantity >= line.quantity for line in po.lines):
+        raise ConflictError("All purchase order quantities have already been received")
 
     grn = GoodsReceipt(
         tenant_id=user.tenant_id,
@@ -281,7 +295,6 @@ async def receive_purchase_order(
             )
         )
         line.received_quantity = line.quantity
-        product = await db.get(Product, line.product_id)
         db.add(
             StockMove(
                 tenant_id=user.tenant_id,
@@ -290,7 +303,7 @@ async def receive_purchase_order(
                 warehouse_id=warehouse.id if warehouse else None,
                 movement_type="receipt",
                 quantity=remaining,
-                unit_cost=product.purchase_price if product else line.unit_price,
+                unit_cost=line.unit_price,
                 reason=f"GRN {grn.grn_number}",
                 reference=po.po_number,
             )
@@ -299,6 +312,7 @@ async def receive_purchase_order(
         if line.received_quantity < line.quantity:
             fully_received = False
     po.status = "received" if fully_received else "partially_received"
+    await post_goods_receipt_accrual(db, user, grn)
 
     await record_audit(
         db,
@@ -323,7 +337,8 @@ async def approve_vendor_invoice(
     user: User = Depends(require_permissions("procurement.vendorinvoice.update")),
     db: AsyncSession = Depends(get_db),
 ):
-    invoice = await db.scalar(select(VendorInvoice).where(VendorInvoice.id == invoice_id))
+    invoice_stmt = select(VendorInvoice).where(VendorInvoice.id == invoice_id).with_for_update()
+    invoice = await db.scalar(invoice_stmt)
     if invoice is None:
         raise NotFoundError("Vendor invoice not found")
     if not user.is_superuser and invoice.tenant_id != user.tenant_id:
@@ -333,7 +348,7 @@ async def approve_vendor_invoice(
     if invoice.purchase_order_id is None:
         raise ConflictError("Vendor invoice must reference a purchase order for three-way matching")
 
-    po = await _load_po(db, user, invoice.purchase_order_id)
+    po = await _load_po(db, user, invoice.purchase_order_id, for_update=True)
     total_received = Decimal("0")
     total_ordered = Decimal("0")
     for line in po.lines:
@@ -342,11 +357,11 @@ async def approve_vendor_invoice(
     if total_received < total_ordered * Decimal("0.99"):
         raise ConflictError("Three-way match failed: goods not fully received against the purchase order")
 
-    invoice_total = invoice.amount + invoice.tax_amount
+    invoice_total = invoice.amount
     tolerance = po.total * Decimal("0.05")
     if abs(invoice_total - po.total) > tolerance:
         raise ConflictError(
-            f"Three-way match failed: invoice {invoice_total} does not match PO total {po.total}"
+            f"Three-way match failed: invoice taxable base {invoice_total} does not match PO total {po.total}"
         )
 
     invoice.status = "approved"
@@ -365,3 +380,75 @@ async def approve_vendor_invoice(
     await db.commit()
     await db.refresh(invoice)
     return invoice
+
+
+@router.put(
+    "/vendor-invoices/{invoice_id}/tax-lines",
+    response_model=list[VendorInvoiceTaxLineRead],
+    tags=["Procurement · Vendor Invoices"],
+)
+async def replace_vendor_invoice_tax_lines(
+    invoice_id: UUID,
+    payload: VendorInvoiceTaxLinesUpdate,
+    request: Request,
+    user: User = Depends(require_permissions("procurement.vendorinvoice.update")),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(VendorInvoice).where(VendorInvoice.id == invoice_id).with_for_update()
+    if not user.is_superuser and user.tenant_id:
+        stmt = stmt.where(VendorInvoice.tenant_id == user.tenant_id)
+    invoice = await db.scalar(stmt)
+    if invoice is None:
+        raise NotFoundError("Vendor invoice not found")
+    if invoice.status != "pending":
+        raise ConflictError("GST lines can only be changed on a pending vendor invoice")
+
+    tax_lines = []
+    for line in payload.lines:
+        values = await calculate_tax_snapshot(
+            db,
+            invoice.tenant_id,
+            tax_code_id=line.tax_code_id,
+            registration_id=line.registration_id,
+            place_of_supply_state_code=line.place_of_supply_state_code,
+            taxable_amount=line.taxable_amount,
+            description=line.description,
+        )
+        tax_lines.append(
+            VendorInvoiceTaxLine(
+                tenant_id=invoice.tenant_id,
+                created_by_id=user.id,
+                invoice_id=invoice.id,
+                **{
+                    key: value
+                    for key, value in values.items()
+                    if not key.startswith("output_")
+                },
+            )
+        )
+    base, tax = tax_line_totals(tax_lines)
+    if base != invoice.amount:
+        raise ValidationError(
+            f"GST taxable lines total {base} must equal the vendor invoice amount {invoice.amount}"
+        )
+    invoice.tax_amount = tax
+    await db.execute(
+        delete(VendorInvoiceTaxLine).where(VendorInvoiceTaxLine.invoice_id == invoice.id)
+    )
+    db.add_all(tax_lines)
+    await record_audit(
+        db,
+        user=user,
+        action="replace_tax_lines",
+        module="procurement",
+        entity="VendorInvoice",
+        entity_id=invoice.id,
+        changes={
+            "tax_line_count": len(tax_lines),
+            "taxable_amount": str(base),
+            "tax_amount": str(tax),
+        },
+        request=request,
+    )
+    await db.commit()
+    return tax_lines

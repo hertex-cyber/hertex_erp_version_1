@@ -35,6 +35,7 @@ class TicketBase(ORMModel):
     status: str = "open"
     assignee_id: Optional[UUID] = None
     sla_due_at: Optional[datetime] = None
+    needs_project_work: bool = False
 
 
 class TicketCreate(TicketBase):
@@ -49,6 +50,7 @@ class TicketUpdate(ORMModel):
     assignee_id: Optional[UUID] = None
     sla_due_at: Optional[datetime] = None
     resolved_at: Optional[datetime] = None
+    needs_project_work: Optional[bool] = None
     is_active: Optional[bool] = None
 
 
@@ -66,6 +68,8 @@ class TicketRead(ORMModel):
     assignee_id: Optional[UUID] = None
     sla_due_at: Optional[datetime] = None
     resolved_at: Optional[datetime] = None
+    needs_project_work: bool
+    project_work_item_id: Optional[UUID] = None
     is_active: bool
     created_at: datetime
     messages: list[TicketMessageRead] = []

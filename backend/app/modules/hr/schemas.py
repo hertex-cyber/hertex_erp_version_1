@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.core.schemas import ORMModel
 
@@ -41,6 +41,7 @@ class EmployeeBase(ORMModel):
     department_id: Optional[UUID] = None
     date_of_joining: Optional[date] = None
     date_of_birth: Optional[date] = None
+    date_of_exit: Optional[date] = None
     employment_type: str = "full_time"
     salary: Decimal = Decimal("0")
     bank_account: Optional[str] = None
@@ -62,12 +63,17 @@ class EmployeeUpdate(ORMModel):
     department_id: Optional[UUID] = None
     date_of_joining: Optional[date] = None
     date_of_birth: Optional[date] = None
+    date_of_exit: Optional[date] = None
     employment_type: Optional[str] = None
     salary: Optional[Decimal] = None
     bank_account: Optional[str] = None
     address: Optional[str] = None
     status: Optional[str] = None
     is_active: Optional[bool] = None
+
+
+class EmployeeExitRequest(ORMModel):
+    date_of_exit: date
 
 
 class EmployeeRead(ORMModel):
@@ -80,6 +86,7 @@ class EmployeeRead(ORMModel):
     designation: Optional[str] = None
     department_id: Optional[UUID] = None
     date_of_joining: Optional[date] = None
+    date_of_exit: Optional[date] = None
     employment_type: str
     salary: Decimal
     status: str
@@ -159,7 +166,14 @@ class LeaveRead(ORMModel):
 
 class PayrollRunBase(ORMModel):
     period: str = Field(pattern=r"^\d{4}-\d{2}$")
-    status: str = "draft"
+
+    @field_validator("period")
+    @classmethod
+    def validate_period(cls, value: str) -> str:
+        year, month = (int(part) for part in value.split("-"))
+        if year < 1 or not 1 <= month <= 12:
+            raise ValueError("Payroll period must be a valid YYYY-MM month")
+        return value
 
 
 class PayrollRunCreate(PayrollRunBase):
@@ -167,7 +181,7 @@ class PayrollRunCreate(PayrollRunBase):
 
 
 class PayrollRunUpdate(ORMModel):
-    status: Optional[str] = None
+    pass
 
 
 class PayrollRunRead(ORMModel):
@@ -178,6 +192,7 @@ class PayrollRunRead(ORMModel):
     total_deductions: Decimal
     total_net: Decimal
     processed_at: Optional[datetime] = None
+    journal_entry_id: Optional[UUID] = None
     created_at: datetime
 
 

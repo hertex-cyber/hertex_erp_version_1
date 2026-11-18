@@ -9,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.identity.models import AuditLog, User
 
-REDACTED_KEYS = {"password", "hashed_password", "token", "refresh_token", "secret"}
+REDACTED_KEYS = {
+    "password", "current_password", "new_password", "hashed_password", "token",
+    "refresh_token", "secret", "mfa_secret", "totp_secret", "code", "recovery_codes",
+}
 
 
 def _jsonable(value: Any) -> Any:
@@ -42,6 +45,8 @@ async def record_audit(
     entity_id: str | UUID | None = None,
     changes: Optional[dict[str, Any]] = None,
     request: Request | None = None,
+    on_behalf_of: UUID | str | None = None,
+    correlation_id: str | None = None,
 ) -> None:
     log = AuditLog(
         tenant_id=user.tenant_id if user else None,
@@ -52,7 +57,13 @@ async def record_audit(
         entity=entity,
         entity_id=str(entity_id) if entity_id else None,
         changes=_sanitize(changes or {}),
-        ip_address=request.client.host if request and request.client else None,
+        ip_address=(
+            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (request.client.host if request.client else None)
+        ) if request else None,
         user_agent=request.headers.get("user-agent") if request else None,
+        on_behalf_of_id=UUID(str(on_behalf_of)) if on_behalf_of else None,
+        correlation_id=correlation_id
+        or (request.headers.get("x-correlation-id") if request else None),
     )
     db.add(log)

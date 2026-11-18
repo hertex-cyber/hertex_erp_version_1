@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import Date, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -43,6 +43,12 @@ class SalesOrder(TenantBaseModel):
     warehouse_id: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="SET NULL"), nullable=True
     )
+    tax_registration_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("finance_tax_registrations.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    place_of_supply_state_code: Mapped[Optional[str]] = mapped_column(String(2), nullable=True)
 
     customer: Mapped[Optional[Customer]] = relationship(lazy="selectin")
     lines: Mapped[list["SalesOrderLine"]] = relationship(
@@ -64,6 +70,26 @@ class SalesOrderLine(TenantBaseModel):
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     discount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     tax_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    tax_code_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_tax_codes.id", ondelete="RESTRICT"), nullable=True
+    )
+    cgst_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    sgst_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    igst_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    cgst_rate_snapshot: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    sgst_rate_snapshot: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    igst_rate_snapshot: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    tax_type_snapshot: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    can_claim_itc_snapshot: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    output_cgst_account_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="RESTRICT"), nullable=True
+    )
+    output_sgst_account_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="RESTRICT"), nullable=True
+    )
+    output_igst_account_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="RESTRICT"), nullable=True
+    )
     line_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
 
     order: Mapped[SalesOrder] = relationship(back_populates="lines")

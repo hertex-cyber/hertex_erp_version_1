@@ -1,4 +1,10 @@
+import time
+from uuid import uuid4
+
 import pytest
+
+from app.core.config import settings
+from app.core.security import totp_code
 
 
 @pytest.mark.asyncio
@@ -125,3 +131,159 @@ async def test_assistant_answers_revenue_question(client, auth):
     assert body["intent"] == "revenue"
     assert body["answer"]
     assert body["suggestions"]
+
+
+async def _create_auth_user(client, auth, label):
+    email = f"{label}-{uuid4().hex[:8]}@example.com"
+    password = "Str0ng!Pass-2026"
+    created = await client.post(
+        "/api/v1/users",
+        headers=auth,
+        json={"email": email, "password": password, "full_name": "Auth Test User"},
+    )
+    assert created.status_code == 201, created.text
+    return email, password, created.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_weak_passwords_are_rejected(client):
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "tenant_name": "Weak Pass Co",
+            "full_name": "Weak User",
+            "email": f"weak-{uuid4().hex[:8]}@example.com",
+            "password": "short1!",
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_login_sets_refresh_cookie_and_csrf(client):
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@hertex.dev", "password": "Admin@12345"},
+    )
+    assert response.status_code == 200
+    assert client.cookies.get("hertex_refresh")
+    assert client.cookies.get("hertex_csrf")
+
+
+@pytest.mark.asyncio
+async def test_cookie_refresh_requires_csrf_header(client):
+    await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@hertex.dev", "password": "Admin@12345"},
+    )
+    rejected = await client.post("/api/v1/auth/refresh", json={})
+    assert rejected.status_code == 401
+
+    csrf = client.cookies.get("hertex_csrf")
+    accepted = await client.post(
+        "/api/v1/auth/refresh", json={}, headers={"x-csrf-token": csrf}
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_failed_logins_lock_account(client, auth):
+    email, password, _ = await _create_auth_user(client, auth, "lockout")
+    for _ in range(settings.MAX_FAILED_LOGINS):
+        rejected = await client.post(
+            "/api/v1/auth/login", json={"email": email, "password": "wrong-password"}
+        )
+        assert rejected.status_code == 401
+
+    locked = await client.post(
+        "/api/v1/auth/login", json={"email": email, "password": password}
+    )
+    assert locked.status_code == 401
+    assert "locked" in locked.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_mfa_challenge_and_recovery_code(client, auth):
+    email, password, _ = await _create_auth_user(client, auth, "mfa")
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    setup = await client.post("/api/v1/auth/mfa/setup", headers=headers)
+    assert setup.status_code == 200
+    secret = setup.json()["secret"]
+    recovery_codes = setup.json()["recovery_codes"]
+
+    enabled = await client.post(
+        "/api/v1/auth/mfa/enable",
+        headers=headers,
+        json={"code": totp_code(secret), "recovery_codes": recovery_codes},
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    challenged = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    assert challenged.status_code == 200
+    challenge_token = challenged.json()["challenge_token"]
+    verified = await client.post(
+        "/api/v1/auth/mfa/verify",
+        json={"challenge_token": challenge_token, "code": totp_code(secret, int(time.time()) // 30 + 1)},
+    )
+    assert verified.status_code == 200, verified.text
+
+    challenged = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    assert challenged.status_code == 200
+    recovered = await client.post(
+        "/api/v1/auth/mfa/verify",
+        json={"challenge_token": challenged.json()["challenge_token"], "recovery_code": recovery_codes[0]},
+    )
+    assert recovered.status_code == 200, recovered.text
+
+
+@pytest.mark.asyncio
+async def test_revoking_session_invalidates_access_token(client):
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@hertex.dev", "password": "Admin@12345"},
+    )
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    sessions = await client.get("/api/v1/auth/sessions", headers=headers)
+    assert sessions.status_code == 200
+    current = next(row for row in sessions.json() if row["current"])
+
+    revoked = await client.delete(f"/api/v1/auth/sessions/{current['id']}", headers=headers)
+    assert revoked.status_code == 200
+    me = await client.get("/api/v1/auth/me", headers=headers)
+    assert me.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_password_reset_flow(client, auth):
+    email, password, _ = await _create_auth_user(client, auth, "reset")
+    requested = await client.post("/api/v1/auth/forgot-password", json={"email": email})
+    assert requested.status_code == 200
+    token = requested.json()["dev_token"]
+    assert token
+
+    new_password = "N3w!Secure-Pass-2026"
+    reset = await client.post(
+        "/api/v1/auth/reset-password", json={"token": token, "new_password": new_password}
+    )
+    assert reset.status_code == 200, reset.text
+
+    old_login = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    assert old_login.status_code == 401
+    new_login = await client.post("/api/v1/auth/login", json={"email": email, "password": new_password})
+    assert new_login.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_security_overview(client, auth):
+    response = await client.get("/api/v1/auth/security", headers=auth)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["password_policy"]["min_length"] >= 12
+    assert "mfa" in body
+    assert any(session["current"] for session in body["sessions"])

@@ -2,31 +2,60 @@ import clsx from 'clsx'
 
 export { clsx as cn }
 
-const inr = new Intl.NumberFormat('en-IN', {
-  style: 'currency',
-  currency: 'INR',
-  maximumFractionDigits: 0,
-})
+const formatterCache = new Map()
 
-const inrPrecise = new Intl.NumberFormat('en-IN', {
-  style: 'currency',
-  currency: 'INR',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-})
-
-export const money = (value, { precise = false } = {}) => {
-  const number = Number(value ?? 0)
-  if (Number.isNaN(number)) return precise ? inrPrecise.format(0) : inr.format(0)
-  return (precise ? inrPrecise : inr).format(number)
+export function isRestrictedValue(value) {
+  if (value === null || value === undefined) return true
+  if (typeof value !== 'string') return false
+  return ['', 'restricted', 'masked', 'null'].includes(value.trim().toLowerCase())
 }
 
-export const compactMoney = (value) => {
+export function resolveCurrency(value, fallback = 'INR') {
+  const candidate = typeof value === 'string' ? value.trim().toUpperCase() : ''
+  return /^[A-Z]{3}$/.test(candidate) ? candidate : fallback
+}
+
+function currencyFormatter(currency, precise) {
+  const resolved = resolveCurrency(currency)
+  const key = `${resolved}:${precise ? 'p' : 'i'}`
+  if (!formatterCache.has(key)) {
+    formatterCache.set(
+      key,
+      new Intl.NumberFormat('en-IN', {
+        style: 'currency',
+        currency: resolved,
+        ...(precise
+          ? { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+          : { maximumFractionDigits: 0 }),
+      }),
+    )
+  }
+  return formatterCache.get(key)
+}
+
+export const money = (value, { precise = false, currency = 'INR', restricted = false } = {}) => {
+  if (restricted && isRestrictedValue(value)) return 'Restricted'
   const number = Number(value ?? 0)
-  if (Math.abs(number) >= 10000000) return `₹${(number / 10000000).toFixed(2)} Cr`
-  if (Math.abs(number) >= 100000) return `₹${(number / 100000).toFixed(2)} L`
-  if (Math.abs(number) >= 1000) return `₹${(number / 1000).toFixed(1)}k`
-  return inr.format(number)
+  const formatter = currencyFormatter(currency, precise)
+  if (Number.isNaN(number)) return formatter.format(0)
+  return formatter.format(number)
+}
+
+export const compactMoney = (value, { currency = 'INR', restricted = false } = {}) => {
+  if (restricted && isRestrictedValue(value)) return 'Restricted'
+  const number = Number(value ?? 0)
+  const resolved = resolveCurrency(currency)
+  const symbol =
+    resolved === 'INR'
+      ? '₹'
+      : new Intl.NumberFormat('en-IN', { style: 'currency', currency: resolved })
+          .formatToParts(0)
+          .find((part) => part.type === 'currency')?.value ?? resolved
+  if (Number.isNaN(number)) return `${symbol}0`
+  if (Math.abs(number) >= 10000000) return `${symbol}${(number / 10000000).toFixed(2)} Cr`
+  if (Math.abs(number) >= 100000) return `${symbol}${(number / 100000).toFixed(2)} L`
+  if (Math.abs(number) >= 1000) return `${symbol}${(number / 1000).toFixed(1)}k`
+  return currencyFormatter(resolved, false).format(number)
 }
 
 export const num = (value, digits = 0) => {
@@ -80,10 +109,10 @@ export const initials = (name) =>
     .join('') || 'H'
 
 const tones = {
-  positive: ['paid', 'active', 'confirmed', 'fulfilled', 'approved', 'won', 'delivered', 'processed', 'resolved', 'completed', 'done', 'present', 'received', 'posted'],
-  warning: ['pending', 'pending_approval', 'draft', 'scheduled', 'partially_received', 'on_hold', 'qualification', 'negotiation', 'sent', 'open', 'in_progress', 'todo'],
-  danger: ['overdue', 'cancelled', 'failed', 'rejected', 'closed', 'lost', 'absent', 'inactive', 'dispatched'],
-  info: ['new', 'new_lead', 'contacted', 'proposal', 'manual', 'web', 'bank', 'cash', 'whatsapp', 'pos', 'inventory', 'sale', 'receipt', 'adjustment'],
+  positive: ['paid', 'active', 'activated', 'confirmed', 'fulfilled', 'approved', 'won', 'delivered', 'processed', 'resolved', 'completed', 'done', 'present', 'received', 'posted', 'accepted', 'reached', 'billed', 'invoiced', 'published', 'applied', 'executed', 'committed', 'validated', 'succeeded', 'success', 'green', 'approved_changes'],
+  warning: ['pending', 'pending_approval', 'approval_pending', 'draft', 'scheduled', 'partially_received', 'on_hold', 'hold', 'qualification', 'negotiation', 'sent', 'open', 'in_progress', 'todo', 'in_review', 'review', 'submitted', 'identified', 'analysing', 'planned', 'proposed', 'requested', 'staged', 'validating', 'triaged', 'advisory', 'amber'],
+  danger: ['overdue', 'cancelled', 'failed', 'rejected', 'closed', 'lost', 'absent', 'inactive', 'dispatched', 'blocked', 'escalated', 'rolled_back', 'rollback', 'red'],
+  info: ['new', 'new_lead', 'contacted', 'proposal', 'manual', 'web', 'bank', 'cash', 'whatsapp', 'pos', 'inventory', 'sale', 'receipt', 'adjustment', 'backlog', 'mitigated', 'running', 'unknown', 'baseline', 'critical', 'dependency'],
 }
 
 export function statusTone(status) {

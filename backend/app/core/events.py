@@ -26,8 +26,15 @@ def subscribe(event_name: str) -> Callable[[Handler], Handler]:
     return decorator
 
 
-async def publish(event_name: str, payload: dict[str, Any]) -> None:
-    logger.info("event.published", extra={"event": event_name})
+async def publish(
+    event_name: str, payload: dict[str, Any], correlation_id: str | None = None
+) -> None:
+    if correlation_id:
+        payload.setdefault("correlation_id", correlation_id)
+    logger.info(
+        "event.published",
+        extra={"event": event_name, "correlation_id": correlation_id},
+    )
     handlers = list(_handlers.get(event_name, []))
     if not handlers:
         return
