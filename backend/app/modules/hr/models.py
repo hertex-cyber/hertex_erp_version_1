@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import TenantBaseModel
 
-
+"""hr module models"""
 class Department(TenantBaseModel):
     __tablename__ = "hr_departments"
 

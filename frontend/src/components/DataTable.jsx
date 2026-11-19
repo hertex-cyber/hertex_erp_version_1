@@ -1,17 +1,26 @@
-import { cn } from '../lib/format'
-import { EmptyState, Spinner } from './ui'
+import { cn } from "../lib/format";
 
-export function DataTable({ columns, rows, loading, empty, rowActions, onRowClick, rowKey = (row) => row.id }) {
+import { EmptyState, Spinner } from "./ui";
+
+export function DataTable({
+  columns,
+  rows,
+  loading,
+  empty,
+  rowActions,
+  onRowClick,
+  rowKey = (row) => row.id,
+}) {
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-3 px-5 py-20 text-sm text-muted">
         <Spinner className="h-5 w-5 text-primary" />
         Loading records…
       </div>
-    )
+    );
   }
 
-  if (!rows.length) return empty
+  if (!rows.length) return empty;
 
   return (
     <div className="overflow-x-auto">
@@ -19,7 +28,14 @@ export function DataTable({ columns, rows, loading, empty, rowActions, onRowClic
         <thead className="border-b border-line bg-surface-2/70">
           <tr>
             {columns.map((column) => (
-              <th key={column.key} className={cn('th', column.align === 'right' && 'text-right', column.className)}>
+              <th
+                key={column.key}
+                className={cn(
+                  "th",
+                  column.align === "right" && "text-right",
+                  column.className,
+                )}
+              >
                 {column.label}
               </th>
             ))}
@@ -31,23 +47,38 @@ export function DataTable({ columns, rows, loading, empty, rowActions, onRowClic
             <tr
               key={rowKey(row)}
               className={cn(
-                'border-b border-line/70 transition last:border-0 hover:bg-surface-2/60',
-                onRowClick && 'cursor-pointer',
+                "border-b border-line/70 transition last:border-0 hover:bg-surface-2/60",
+                onRowClick && "cursor-pointer",
               )}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
             >
               {columns.map((column) => (
                 <td
                   key={column.key}
-                  className={cn('td', column.align === 'right' && 'text-right', column.className)}
-                  onClick={column.stopPropagation ? (event) => event.stopPropagation() : undefined}
+                  className={cn(
+                    "td",
+                    column.align === "right" && "text-right",
+                    column.className,
+                  )}
+                  onClick={
+                    column.stopPropagation
+                      ? (event) => event.stopPropagation()
+                      : undefined
+                  }
                 >
-                  {column.render ? column.render(row) : row[column.key] ?? '—'}
+                  {column.render
+                    ? column.render(row)
+                    : (row[column.key] ?? "—")}
                 </td>
               ))}
               {rowActions && (
-                <td className="td text-right" onClick={(event) => event.stopPropagation()}>
-                  <div className="flex items-center justify-end gap-1">{rowActions(row)}</div>
+                <td
+                  className="td text-right"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="flex items-center justify-end gap-1">
+                    {rowActions(row)}
+                  </div>
                 </td>
               )}
             </tr>
@@ -55,7 +86,7 @@ export function DataTable({ columns, rows, loading, empty, rowActions, onRowClic
         </tbody>
       </table>
     </div>
-  )
+  );
 }
 
 export function TableSkeleton({ rows = 6 }) {
@@ -72,7 +103,7 @@ export function TableSkeleton({ rows = 6 }) {
         </div>
       ))}
     </div>
-  )
+  );
 }
 
-export { EmptyState }
+export { EmptyState };
