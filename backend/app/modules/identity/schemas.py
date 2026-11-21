@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import EmailStr, Field
@@ -35,6 +35,7 @@ class RoleBase(ORMModel):
     slug: str = Field(min_length=2, max_length=120)
     description: str = ""
     approval_limit: Optional[Decimal] = None
+    menu_keys: list[str] = []
 
 
 class RoleCreate(RoleBase):
@@ -46,6 +47,7 @@ class RoleUpdate(ORMModel):
     description: Optional[str] = None
     approval_limit: Optional[Decimal] = None
     permission_ids: Optional[list[UUID]] = None
+    menu_keys: Optional[list[str]] = None
     is_active: Optional[bool] = None
 
 
@@ -58,6 +60,7 @@ class RoleRead(ORMModel):
     is_system: bool
     is_active: bool = True
     approval_limit: Optional[Decimal] = None
+    menu_keys: list[str] = []
     permissions: list[PermissionRead] = []
 
 
@@ -211,6 +214,8 @@ class PermissionSummary(ORMModel):
     is_superuser: bool
     permissions: list[str]
     roles: list[str]
+    menus: list[str] = []
+    feature_flags: dict[str, Any] = {}
     tenant_id: Optional[UUID] = None
 
 

@@ -13,18 +13,16 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
+import BrandLogo from './BrandLogo'
 import { cn } from '../lib/format'
-import { NAV_GROUPS } from '../lib/nav'
+import { NAV_GROUPS, canNavigate, filterNavGroups } from '../lib/nav'
 import { useAuth } from '../store/auth'
 import { Avatar, Modal } from './ui'
 
 function Brand({ compact = false }) {
   return (
     <Link to="/" className={cn('flex items-center gap-3', compact && 'justify-center')}>
-      <span className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gold text-[15px] font-extrabold text-forest shadow-[0_6px_18px_-8px_rgba(255,105,0,0.9)]">
-        H
-        <span className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/25" />
-      </span>
+      <BrandLogo compact={compact} className={compact ? 'drop-shadow-[0_6px_18px_rgba(255,105,0,0.35)]' : 'drop-shadow-[0_6px_18px_rgba(255,105,0,0.35)]'} />
       {!compact && (
         <span className="min-w-0">
           <span className="display block truncate text-lg font-semibold leading-none text-white">Hertex</span>
@@ -36,15 +34,12 @@ function Brand({ compact = false }) {
 }
 
 function SidebarContent({ collapsed, onNavigate, onCollapse }) {
-  const can = useAuth((state) => state.can)
+  const auth = useAuth()
   const [query, setQuery] = useState('')
   const location = useLocation()
 
   const groups = useMemo(() => {
-    const visible = NAV_GROUPS.map((group) => ({
-      ...group,
-      items: group.items.filter((item) => can(item.permission)),
-    })).filter((group) => group.items.length)
+    const visible = filterNavGroups(NAV_GROUPS, auth)
     if (!query.trim()) return visible
     const needle = query.toLowerCase()
     return [
@@ -53,7 +48,7 @@ function SidebarContent({ collapsed, onNavigate, onCollapse }) {
         items: visible.flatMap((group) => group.items).filter((item) => item.label.toLowerCase().includes(needle)),
       },
     ].filter((group) => group.items.length)
-  }, [can, query])
+  }, [auth, query])
 
   return (
     <div className="flex h-full flex-col">
@@ -186,16 +181,16 @@ function MiniProfile({ collapsed }) {
 }
 
 function CommandPalette({ open, onClose }) {
-  const can = useAuth((state) => state.can)
+  const auth = useAuth()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
 
   const items = useMemo(() => {
-    const all = NAV_GROUPS.flatMap((group) => group.items.filter((item) => can(item.permission)))
+    const all = NAV_GROUPS.flatMap((group) => group.items.filter((item) => canNavigate(item, auth)))
     if (!query.trim()) return all.slice(0, 9)
     const needle = query.toLowerCase()
     return all.filter((item) => item.label.toLowerCase().includes(needle)).slice(0, 10)
-  }, [can, query])
+  }, [auth, query])
 
   useEffect(() => {
     if (open) setQuery('')

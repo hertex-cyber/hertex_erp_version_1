@@ -14,6 +14,7 @@ from app.core.audit import record_audit
 from app.core.config import settings
 from app.core.deps import get_current_user, require_permissions, require_superuser
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
+from app.core.menu_catalog import MENU_MODULES, effective_menus, normalize_menu_keys
 from app.core.ratelimit import check_rate_limit
 from app.core.schemas import Message, Page
 from app.core.security import (
@@ -71,6 +72,7 @@ from app.modules.identity.schemas import (
     UserRead,
     UserUpdate,
 )
+from app.modules.settings.service import settings_service
 
 auth_router = APIRouter(prefix="/auth", tags=["Authentication"])
 users_router = APIRouter(prefix="/users", tags=["Users & RBAC"])
@@ -527,11 +529,24 @@ async def update_me(
 
 
 @auth_router.get("/permissions", response_model=PermissionSummary)
-async def my_permissions(user: User = Depends(get_current_user)):
+async def my_permissions(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    resolved = await settings_service.resolve_all(
+        db, tenant_id=user.tenant_id, user_id=user.id
+    )
+    feature_flags = {
+        key: bool(value)
+        for key, value in resolved.items()
+        if key.startswith("features.")
+    }
     return PermissionSummary(
         is_superuser=user.is_superuser,
         permissions=sorted(user.permission_codes()),
         roles=[role.slug for role in user.roles],
+        menus=effective_menus(user),
+        feature_flags=feature_flags,
         tenant_id=user.tenant_id,
     )
 
@@ -851,6 +866,14 @@ async def deactivate_user(
 manage_roles = require_permissions("system.role.manage")
 
 
+@roles_router.get("/menu/catalog", response_model=list[dict[str, str]])
+async def menu_catalog(actor: User = Depends(manage_roles)):
+    return [
+        {"id": item["key"], "name": item["label"], **item}
+        for item in MENU_MODULES
+    ]
+
+
 @roles_router.get("", response_model=list[RoleRead])
 async def list_roles(
     actor: User = Depends(manage_roles),
@@ -879,6 +902,7 @@ async def create_role(
         slug=payload.slug,
         description=payload.description,
         approval_limit=payload.approval_limit,
+        menu_keys=normalize_menu_keys(payload.menu_keys),
         is_system=False,
         permissions=perms,
     )
@@ -902,9 +926,11 @@ async def update_role(
         raise NotFoundError("Role not found")
     if role.is_system or (role.tenant_id not in (None, actor.tenant_id) and not actor.is_superuser):
         raise ForbiddenError("System and cross-tenant roles cannot be edited")
-    data = payload.model_dump(exclude_unset=True, exclude={"permission_ids"})
+    data = payload.model_dump(exclude_unset=True, exclude={"permission_ids", "menu_keys"})
     for field, value in data.items():
         setattr(role, field, value)
+    if payload.menu_keys is not None:
+        role.menu_keys = normalize_menu_keys(payload.menu_keys)
     if payload.permission_ids is not None:
         role.permissions = list(
             (await db.scalars(select(Permission).where(Permission.id.in_(payload.permission_ids)))).all()

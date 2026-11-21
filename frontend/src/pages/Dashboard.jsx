@@ -37,6 +37,7 @@ import {
 } from 'lucide-react'
 import { api, apiErrorMessage } from '../lib/api'
 import { compactMoney, dateTimeLabel, money, num, titleCase } from '../lib/format'
+import { describePath } from '../lib/nav'
 import { useAuth } from '../store/auth'
 import { EmptyState, KpiCard, PageHeader, SectionCard, Spinner } from '../components/ui'
 
@@ -174,6 +175,7 @@ function InsightsPanel({ insights }) {
 
 export default function Dashboard() {
   const user = useAuth((state) => state.user)
+  const canView = useAuth().canView
   const [data, setData] = useState(null)
   const [insights, setInsights] = useState([])
   const [loading, setLoading] = useState(true)
@@ -316,12 +318,12 @@ export default function Dashboard() {
 
         <SectionCard title="Signals" description="Small numbers that need a look.">
           <div className="grid grid-cols-2 gap-3 p-4">
-            {[
+              {[
               { label: 'Low stock', value: kpis.low_stock_count, icon: Boxes, to: '/inventory/stock', tone: 'text-accent bg-accent-soft' },
               { label: 'Open tickets', value: kpis.open_tickets, icon: LifeBuoy, to: '/support', tone: 'text-sky-700 bg-sky-50' },
               { label: 'Active projects', value: kpis.active_projects, icon: FolderKanban, to: '/projects/projects', tone: 'text-primary bg-primary-soft' },
               { label: 'Team size', value: kpis.employee_count, icon: Users, to: '/hr/employees', tone: 'text-gold bg-gold-soft' },
-            ].map((item) => (
+            ].filter((item) => canView(describePath(item.to))).map((item) => (
               <Link key={item.label} to={item.to} className="rounded-2xl border border-line bg-surface-2/50 p-3.5 transition hover:-translate-y-0.5 hover:bg-surface-2">
                 <span className={`inline-flex h-8 w-8 items-center justify-center rounded-xl ${item.tone}`}>
                   <item.icon size={15} />
@@ -357,7 +359,7 @@ export default function Dashboard() {
           { label: 'Raise an invoice', to: '/finance/invoices', icon: FileText },
           { label: 'Receive stock', to: '/procurement/purchase-orders', icon: Package },
           { label: 'Review reports', to: '/finance/reports', icon: TrendingUp },
-        ].map((action) => (
+        ].filter((item) => canView(describePath(item.to))).map((action) => (
           <Link key={action.label} to={action.to} className="card flex items-center gap-3 p-4 transition hover:-translate-y-0.5 hover:border-primary/30">
             <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-primary-soft text-primary">
               <action.icon size={16} />

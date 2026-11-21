@@ -17,6 +17,7 @@ import {
 import { api, apiErrorMessage } from '../lib/api'
 import { cn, num, titleCase } from '../lib/format'
 import { fetchLookup } from '../lib/lookups'
+import { describePath } from '../lib/nav'
 import { PROJECT_ASSISTANT_PROMPTS, scopedProjectQuestion } from '../lib/project-helpers'
 import { useAuth } from '../store/auth'
 import { toast } from '../store/toast'
@@ -97,6 +98,7 @@ function Citations({ items }) {
 
 export default function Assistant() {
   const can = useAuth((state) => state.can)
+  const canView = useAuth().canView
   const canUse = can('ai.assistant.use')
   const [messages, setMessages] = useState([
     {
@@ -351,7 +353,7 @@ export default function Assistant() {
                 { to: '/sales/orders', label: 'Sales orders', hint: 'Fulfilment queue' },
                 { to: '/projects/reports', label: 'Project reports', hint: 'Delivery and money analytics' },
                 { to: '/projects/ai-signals', label: 'AI review queue', hint: 'Signals, features and review state' },
-              ].map((item) => (
+              ].filter((item) => canView(describePath(item.to))).map((item) => (
                 <Link key={item.to} to={item.to} className="flex items-center justify-between px-5 py-3 transition hover:bg-surface-2/70">
                   <div>
                     <p className="text-xs font-bold text-ink">{item.label}</p>

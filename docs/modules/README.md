@@ -32,13 +32,14 @@ Deep, code-verified module planning for **hertex-erp**. Each doc follows the 18-
 | 15A | [SETTINGS IMPLEMENTATION PLAN](15A-SETTINGS-IMPLEMENTATION-PLAN.md) | Zoho/SAP/Odoo-grade settings: typed registry + layered resolution, atomic FY numbering engine, GST Rule 46 channel profiles, gap ledger, POS offline blocks, secrets vault | 🟢 implemented / locally verified | 134 backend + 29 frontend + 3 Playwright tests, Alembic replay and gap benchmarks pass; open items: 100-way/mixed concurrency, pattern property/FY suites, collision pre-check, feature-flag nav re-audit |
 | 16 | [IDENTITY](16-IDENTITY.md) | Auth, RBAC, field-level security (D4), audit | ✅ | — |
 | 16a | [AUTH IMPLEMENTATION PLAN](16-IDENTITY-AUTH-IMPLEMENTATION-PLAN.md) | Zoho/SAP-style auth hardening: password policy, MFA, session rotation, recovery, security headers | 🟢 implemented | P4 deferred |
+| 16B | [ROLE-BASED MENU CONTROL](16B-ROLE-BASED-MENU-CONTROL-IMPLEMENTATION-PLAN.md) | Backend-owned role menu access, feature-flag-aware navigation, direct-route guard, role menu administration | 🟢 implemented | Effective menus + feature flags from `/auth/permissions`; shared frontend nav filtering |
 | 17 | [GST-EINVOICING](17-GST-EINVOICING.md) | GST 2.0 splits, IRN/QR, e-way bill, returns, ITC | ✅ | — |
 | 18 | [TALLY-MIGRATION](18-TALLY-MIGRATION.md) | Tally XML integration, migration + coexistence | ✅ | — |
 | 19 | [DOCUMENTS](19-DOCUMENTS.md) | Attachments, PDF generation, storage, legal hold | ✅ | — |
 | 20 | [ASSETS](20-ASSETS.md) | Fixed assets, depreciation, disposal, ITC reversal | ✅ | — |
 | 99 | [IMPLEMENTATION-SEQUENCE](99-IMPLEMENTATION-SEQUENCE.md) | Ordered master roadmap (phases 0–6), dependency graph, MVP slice | ✅ | — |
 
-**25 docs total** (00–20 + 08a + 09a + 15A + 99 index/sequence).
+**26 docs total** (00–20 + 08a + 09a + 15A + 16B + 99 index/sequence).
 
 ---
 

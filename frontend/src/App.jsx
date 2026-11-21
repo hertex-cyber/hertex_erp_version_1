@@ -1,7 +1,10 @@
 import { lazy, Suspense, useEffect } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { ShieldAlert } from 'lucide-react'
 import AppShell from './components/AppShell'
+import BrandLogo from './components/BrandLogo'
 import { LoadingBlock, ToastHost } from './components/ui'
+import { describePath } from './lib/nav'
 import { useAuth } from './store/auth'
 import { ForgotPasswordPage, LoginPage, RegisterPage, ResetPasswordPage } from './pages/Auth'
 
@@ -165,7 +168,7 @@ const RolesPage = lazy(() => import('./pages/resources/settings').then((module) 
 function FullScreenLoader() {
   return (
     <div className="forest-grid flex min-h-screen flex-col items-center justify-center gap-4">
-      <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-gold text-lg font-extrabold text-forest">H</span>
+      <BrandLogo className="h-12 drop-shadow-[0_8px_24px_rgba(255,105,0,0.35)]" />
       <div className="flex items-center gap-2 text-xs font-semibold text-white/50">
         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gold [animation-delay:-0.3s]" />
         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gold [animation-delay:-0.15s]" />
@@ -180,13 +183,26 @@ function Page({ children }) {
   return <Suspense fallback={<LoadingBlock />}>{children}</Suspense>
 }
 
+function AccessDenied() {
+  return (
+    <div className="forest-grid flex min-h-screen flex-col items-center justify-center gap-4 px-6 text-center" data-testid="access-denied">
+      <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gold text-forest"><ShieldAlert size={24} /></span>
+      <h1 className="display text-2xl font-semibold text-white">Access denied</h1>
+      <p className="max-w-md text-sm text-white/60">Your role does not have access to this module. Ask an administrator if you need it enabled.</p>
+      <Link to="/" className="mt-2 rounded-xl bg-gold px-4 py-2 text-xs font-bold text-forest">Back to command centre</Link>
+    </div>
+  )
+}
+
 function ProtectedRoute() {
   const user = useAuth((state) => state.user)
   const loading = useAuth((state) => state.loading)
+  const canView = useAuth().canView
   const location = useLocation()
 
   if (loading) return <FullScreenLoader />
   if (!user) return <Navigate to="/login" replace state={{ from: location }} />
+  if (!canView(describePath(location.pathname))) return <AccessDenied />
   return <AppShell />
 }
 

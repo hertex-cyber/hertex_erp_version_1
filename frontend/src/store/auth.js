@@ -1,11 +1,14 @@
 import { create } from 'zustand'
 import { api } from '../lib/api'
+import { canNavigate } from '../lib/nav'
 import { clearTokens, getAccessToken, getCsrfToken, hasSessionCookie, setAccessToken } from '../lib/tokens'
 
 const emptySession = {
   user: null,
   permissions: [],
   roles: [],
+  menus: [],
+  featureFlags: {},
   isSuperuser: false,
 }
 
@@ -29,8 +32,9 @@ export const useAuth = create((set, get) => ({
       }
     }
     applyTokens(data)
-    set({ user: data.user, loading: false })
+    set({ user: data.user })
     await get().loadPermissions()
+    set({ loading: false })
     return { mfaRequired: false, user: data.user }
   },
 
@@ -40,16 +44,18 @@ export const useAuth = create((set, get) => ({
     else payload.code = code
     const { data } = await api.post('/auth/mfa/verify', payload)
     applyTokens(data)
-    set({ user: data.user, loading: false })
+    set({ user: data.user })
     await get().loadPermissions()
+    set({ loading: false })
     return data.user
   },
 
   register: async (payload) => {
     const { data } = await api.post('/auth/register', payload)
     applyTokens(data)
-    set({ user: data.user, loading: false })
+    set({ user: data.user })
     await get().loadPermissions()
+    set({ loading: false })
     return data.user
   },
 
@@ -58,6 +64,8 @@ export const useAuth = create((set, get) => ({
     set({
       permissions: data.permissions ?? [],
       roles: data.roles ?? [],
+      menus: data.menus ?? [],
+      featureFlags: data.feature_flags ?? {},
       isSuperuser: Boolean(data.is_superuser),
     })
   },
@@ -80,8 +88,9 @@ export const useAuth = create((set, get) => ({
           applyTokens(data)
         }
         const { data } = await api.get('/auth/me')
-        set({ user: data, loading: false })
+        set({ user: data })
         await get().loadPermissions()
+        set({ loading: false })
       } catch {
         clearTokens()
         set({ ...emptySession, loading: false })
@@ -119,4 +128,18 @@ export const useAuth = create((set, get) => ({
     if (isSuperuser || user?.is_superuser) return true
     return permissions.includes(code)
   },
+
+  canMenu: (key) => {
+    if (!key) return true
+    const { menus, isSuperuser, user } = get()
+    if (isSuperuser || user?.is_superuser) return true
+    return menus.includes('*') || menus.includes(key)
+  },
+
+  hasFeature: (key) => {
+    if (!key) return true
+    return get().featureFlags[key] !== false
+  },
+
+  canView: (descriptor) => canNavigate(descriptor, get()),
 }))

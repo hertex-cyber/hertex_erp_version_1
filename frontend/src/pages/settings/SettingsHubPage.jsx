@@ -2,6 +2,8 @@ import { Link } from 'react-router-dom'
 import { ArrowUpRight, BadgeIndianRupee, Building2, Clock3, Globe2, KeyRound, Layers3, ShieldCheck, SlidersHorizontal, Users } from 'lucide-react'
 import { PageHeader } from '../../components/ui'
 import SettingsSubnav from '../../components/settings/SettingsSubnav'
+import { describePath } from '../../lib/nav'
+import { useAuth } from '../../store/auth'
 
 const CARDS = [
   { to: '/settings/organisation', icon: Building2, title: 'Organisation', description: 'Company profile, GSTIN and statutory particulars used on every invoice.' },
@@ -16,12 +18,14 @@ const CARDS = [
 ]
 
 export default function SettingsHubPage() {
+  const canView = useAuth().canView
+
   return (
     <div data-testid="settings-hub">
       <SettingsSubnav />
       <PageHeader eyebrow="Workspace" title="Settings hub" description="One governed place for organisation policy, feature flags, numbering and secrets." />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {CARDS.map(({ to, icon: Icon, title, description }) => (
+        {CARDS.filter((card) => canView(describePath(card.to))).map(({ to, icon: Icon, title, description }) => (
           <Link key={to} to={to} className="card group flex flex-col gap-2 p-5 transition hover:border-primary/40 hover:shadow-[var(--shadow-float)]" data-testid={`hub-card-${title.toLowerCase().replace(/[^a-z]+/g, '-')}`}>
             <div className="flex items-start justify-between gap-2">
               <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-primary-soft text-primary"><Icon size={18} /></span>

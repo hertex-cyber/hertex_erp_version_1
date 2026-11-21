@@ -4,6 +4,8 @@ import { Link } from 'react-router-dom'
 import { EmptyState, KpiCard, PageHeader, SectionCard, Spinner } from '../components/ui'
 import { api, apiErrorMessage } from '../lib/api'
 import { money } from '../lib/format'
+import { describePath } from '../lib/nav'
+import { useAuth } from '../store/auth'
 
 const WORKFLOWS = [
   { title: 'Customer invoices', detail: 'Create invoices, post receivables, and follow collections.', to: '/finance/invoices', icon: FileText },
@@ -15,6 +17,7 @@ const WORKFLOWS = [
 ]
 
 export default function FinanceDashboard() {
+  const canView = useAuth().canView
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -91,7 +94,7 @@ export default function FinanceDashboard() {
       <div className="grid gap-5 xl:grid-cols-[1.4fr_0.8fr]">
         <SectionCard title="Accounting workbench" description="Go directly to the operational task, not just the underlying records.">
           <div className="grid gap-3 p-4 sm:grid-cols-2">
-            {WORKFLOWS.map(({ title, detail, to, icon: Icon }) => (
+            {WORKFLOWS.filter((item) => canView(describePath(item.to))).map(({ title, detail, to, icon: Icon }) => (
               <Link key={to} to={to} className="group rounded-2xl border border-line bg-surface p-4 transition hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-[var(--shadow-float)]">
                 <span className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-primary-soft text-primary"><Icon size={18} /></span>
                 <h2 className="text-sm font-bold text-ink group-hover:text-primary">{title}</h2>

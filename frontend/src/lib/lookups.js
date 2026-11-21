@@ -18,6 +18,7 @@ export const LOOKUPS = {
   invoices: { endpoint: '/finance/invoices', label: (item) => item.invoice_number },
   users: { endpoint: '/users', label: (item) => `${item.full_name} · ${item.email}` },
   roles: { endpoint: '/roles', label: (item) => item.name },
+  menus: { endpoint: '/roles/menu/catalog', label: (item) => item.label ?? item.name },
   companies: { endpoint: '/crm/companies', label: (item) => item.name },
   contacts: { endpoint: '/crm/contacts', label: (item) => `${item.first_name} ${item.last_name ?? ''}`.trim() },
   leads: { endpoint: '/crm/leads', label: (item) => item.name },

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, ArrowRight, CheckCircle2, Eye, EyeOff, KeyRound, Lock, Mail, Sparkles } from 'lucide-react'
+import BrandLogo from '../components/BrandLogo'
 import { api, apiErrorMessage } from '../lib/api'
 import { useAuth } from '../store/auth'
 import { toast } from '../store/toast'
@@ -14,7 +15,7 @@ function AuthArtwork() {
       <div className="absolute bottom-[-160px] left-[-80px] h-[420px] w-[420px] rounded-full bg-gold/10 blur-3xl" />
 
       <Link to="/" className="relative flex items-center gap-3">
-        <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-gold text-base font-extrabold text-forest">H</span>
+        <BrandLogo className="h-12 drop-shadow-[0_8px_24px_rgba(255,105,0,0.35)]" />
         <span>
           <span className="display block text-xl font-semibold leading-none text-white">Hertex</span>
           <span className="mt-1 block text-[9px] font-bold uppercase tracking-[0.3em] text-white/40">Enterprise suite</span>
@@ -62,7 +63,7 @@ function AuthLayout({ children, footer }) {
       <div className="flex min-h-screen flex-col">
         <div className="flex items-center justify-between p-6 lg:justify-end">
           <Link to="/" className="flex items-center gap-2 lg:hidden">
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-sm font-extrabold text-forest">H</span>
+            <BrandLogo compact className="h-9 w-9" />
             <span className="display text-lg font-semibold text-ink">Hertex</span>
           </Link>
           <p className="text-xs text-muted">{footer}</p>

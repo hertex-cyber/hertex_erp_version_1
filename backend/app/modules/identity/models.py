@@ -81,6 +81,7 @@ class Role(BaseModel):
         Boolean, default=True, server_default=true(), nullable=False, index=True
     )
     approval_limit: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    menu_keys: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
 
     permissions: Mapped[list[Permission]] = relationship(
         secondary=role_permissions, lazy="selectin"

@@ -13,6 +13,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.menu_catalog import ROLE_MENU_TEMPLATES, normalize_menu_keys
 from app.core.permissions_catalog import all_permission_specs, role_templates
 from app.core.security import hash_password
 from app.db.registry import Base  # noqa: F401  (ensures metadata is complete)
@@ -85,6 +86,7 @@ async def seed_roles(db, permissions: dict[str, Permission]) -> dict[str, Role]:
     roles: dict[str, Role] = {}
     for slug, template in role_templates().items():
         role = await db.scalar(select(Role).where(Role.slug == slug, Role.tenant_id.is_(None)))
+        menu_keys = normalize_menu_keys(ROLE_MENU_TEMPLATES.get(slug, []))
         if role is None:
             role = Role(
                 tenant_id=None,
@@ -92,6 +94,7 @@ async def seed_roles(db, permissions: dict[str, Permission]) -> dict[str, Role]:
                 slug=slug,
                 description=f"Built-in {template['name']} role",
                 is_system=template.get("system", True),
+                menu_keys=menu_keys,
                 permissions=[permissions[code] for code in template["codes"] if code in permissions],
             )
             db.add(role)
@@ -101,6 +104,7 @@ async def seed_roles(db, permissions: dict[str, Permission]) -> dict[str, Role]:
                 permissions[code] for code in template["codes"] if code in permissions
             ]
             role.is_system = template.get("system", True)
+            role.menu_keys = menu_keys
         roles[slug] = role
     await db.flush()
     return roles

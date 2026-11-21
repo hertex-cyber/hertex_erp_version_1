@@ -76,6 +76,7 @@ export function RolesPage() {
         { key: 'name', label: 'Role', render: (row) => <Primary title={row.name} subtitle={row.description || 'No description'} /> },
         { key: 'slug', label: 'Slug' },
         { key: 'permissions', label: 'Permissions', align: 'right', render: (row) => <span className="font-bold tabular-nums text-ink">{row.permissions?.length ?? 0}</span> },
+        { key: 'menu_keys', label: 'Menus', align: 'right', render: (row) => <span className="font-bold tabular-nums text-ink">{row.menu_keys?.length ?? 0}</span> },
         { key: 'approval_limit', label: 'Approval limit', render: (row) => (row.approval_limit ? `₹${row.approval_limit}` : '—') },
         { key: 'is_system', label: 'Type', render: (row) => <Status value={row.is_system ? 'system' : 'custom'} /> },
       ]}
@@ -84,6 +85,7 @@ export function RolesPage() {
         { name: 'description', label: 'Description' },
         { name: 'approval_limit', label: 'Approval limit', type: 'number' },
         { name: 'permission_ids', label: 'Permissions', type: 'multiselect', lookup: 'permissions', colSpan: 2 },
+        { name: 'menu_keys', label: 'Menu access', type: 'multiselect', lookup: 'menus', colSpan: 2, help: 'Leave empty to derive menus from permissions.' },
         { name: 'is_active', label: 'Active', type: 'checkbox', default: true },
       ]}
       fields={[
@@ -92,6 +94,7 @@ export function RolesPage() {
         { name: 'description', label: 'Description', colSpan: 2 },
         { name: 'approval_limit', label: 'Approval limit', type: 'number' },
         { name: 'permission_ids', label: 'Permissions', type: 'multiselect', lookup: 'permissions', colSpan: 2 },
+        { name: 'menu_keys', label: 'Menu access', type: 'multiselect', lookup: 'menus', colSpan: 2, help: 'Leave empty to derive menus from permissions.' },
       ]}
     />
   )

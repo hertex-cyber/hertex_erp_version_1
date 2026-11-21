@@ -54,7 +54,88 @@ import {
   Workflow,
 } from 'lucide-react'
 
-export const NAV_GROUPS = [
+const MENU_PREFIXES = [
+  ['/assistant', 'assistant'],
+  ['/crm', 'crm'],
+  ['/sales', 'sales'],
+  ['/pos', 'pos'],
+  ['/inventory', 'inventory'],
+  ['/warehouse', 'warehouse'],
+  ['/procurement', 'procurement'],
+  ['/finance', 'finance'],
+  ['/hr', 'hr'],
+  ['/projects', 'projects'],
+  ['/support', 'support'],
+  ['/marketing', 'marketing'],
+  ['/settings', 'settings'],
+]
+
+const MENU_FEATURES = {
+  projects: 'features.module.projects.enabled',
+  pos: 'features.module.pos.enabled',
+  support: 'features.module.support.enabled',
+  marketing: 'features.module.marketing.enabled',
+}
+
+const ACCESS_OVERRIDES = {
+  '/settings/organisation': { menu: 'settings', permission: 'settings.setting.read' },
+  '/settings/localisation': { menu: 'settings', permission: 'settings.setting.read' },
+  '/settings/modules': { menu: 'settings', permission: 'settings.setting.read' },
+  '/settings/security': {},
+  '/settings/sequences': { menu: 'settings', permission: 'settings.sequence.read' },
+  '/projects': { menu: 'projects' },
+  '/projects/tasks': { menu: 'projects', permission: 'projects.workitem.read' },
+  '/procurement/ocr-inbox': { menu: 'procurement', permission: 'procurement.vendorinvoice.read' },
+}
+
+export function menuForPath(path = '') {
+  const normalized = path.split('?')[0]
+  const match = MENU_PREFIXES.find(([prefix]) => normalized === prefix || normalized.startsWith(`${prefix}/`))
+  return match?.[1] ?? 'dashboard'
+}
+
+export function featureForMenu(menu) {
+  return MENU_FEATURES[menu] ?? null
+}
+
+export function canNavigate(item, auth) {
+  if (!item) return true
+  if (item.feature && auth.hasFeature?.(item.feature) === false) return false
+  if (item.menu && auth.canMenu?.(item.menu) === false) return false
+  if (item.permission && auth.can?.(item.permission) === false) return false
+  return true
+}
+
+export function filterNavGroups(groups, auth) {
+  return groups
+    .map((group) => ({ ...group, items: group.items.filter((item) => canNavigate(item, auth)) }))
+    .filter((group) => group.items.length)
+}
+
+export function describePath(path = '') {
+  const normalized = path.split('?')[0].replace(/\/+$/, '') || '/'
+  const items = NAV_GROUPS.flatMap((group) => group.items)
+  const exact = items.find((item) => item.to.split('?')[0].replace(/\/+$/, '') === normalized)
+  if (exact) return exact
+  if (ACCESS_OVERRIDES[normalized]) {
+    const override = ACCESS_OVERRIDES[normalized]
+    return {
+      to: normalized,
+      menu: override.menu ?? menuForPath(normalized),
+      permission: override.permission ?? null,
+      feature: override.feature ?? featureForMenu(override.menu ?? menuForPath(normalized)),
+    }
+  }
+  const prefixes = items
+    .filter((item) => {
+      const prefix = item.to.split('?')[0].replace(/\/+$/, '')
+      return normalized.startsWith(`${prefix}/`)
+    })
+    .sort((left, right) => right.to.length - left.to.length)
+  return prefixes[0] ?? null
+}
+
+const RAW_NAV_GROUPS = [
   {
     label: 'Overview',
     items: [
@@ -272,3 +353,11 @@ export const NAV_GROUPS = [
     ],
   },
 ]
+
+export const NAV_GROUPS = RAW_NAV_GROUPS.map((group) => ({
+  ...group,
+  items: group.items.map((item) => {
+    const menu = item.menu ?? menuForPath(item.to)
+    return { ...item, menu, feature: item.feature ?? featureForMenu(menu) }
+  }),
+}))

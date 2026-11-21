@@ -1,5 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { cn } from '../../lib/format'
+import { describePath } from '../../lib/nav'
+import { useAuth } from '../../store/auth'
 
 export const SETTINGS_LINKS = [
   { to: '/settings', label: 'Hub', end: true },
@@ -18,10 +20,12 @@ export const SETTINGS_LINKS = [
 ]
 
 export default function SettingsSubnav() {
+  const canView = useAuth().canView
+
   return (
     <nav className="-mx-4 mb-5 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0" data-testid="settings-subnav" aria-label="Settings sections">
       <div className="flex min-w-max gap-1.5">
-        {SETTINGS_LINKS.map((link) => (
+        {SETTINGS_LINKS.filter((link) => canView(describePath(link.to))).map((link) => (
           <NavLink
             key={link.to}
             to={link.to}
