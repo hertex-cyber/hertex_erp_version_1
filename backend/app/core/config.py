@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     WHATSAPP_API_BASE: str = "https://graph.facebook.com"
     WHATSAPP_API_VERSION: str = "v23.0"
     META_APP_SECRET: str | None = None
+    META_ACCESS_TOKEN: str | None = None
     RAZORPAY_KEY_ID: str | None = None
     RAZORPAY_KEY_SECRET: str | None = None
 

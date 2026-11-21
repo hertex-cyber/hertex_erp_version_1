@@ -19,6 +19,7 @@ Deep, code-verified module planning for **hertex-erp**. Each doc follows the 18-
 | 05 | [SALES-ORDERS](05-SALES-ORDERS.md) | Quotes, reservations, returns, credit limits | ✅ | 256 |
 | 06 | [POS](06-POS.md) | Offline queue, settlement journals, stock checks | ✅ | 252 |
 | 07 | [CRM](07-CRM.md) | Pipeline, lead scoring, `deal.won` | ✅ | 267 |
+| 07A | [Unified engagement plan](07A-CRM-UNIFIED-ENGAGEMENT-IMPLEMENTATION-PLAN.md) | Explainable scoring, consent, webhooks, conversion, inbox | 🚧 | 243 |
 | 08 | [HR](08-HR.md) | Statutory PF/ESI/TDS engine, payroll journal | ✅ | 288 |
 | 08a | [HR IMPLEMENTATION PLAN](08a-HR-IMPLEMENTATION-PLAN.md) | Zoho/SAP-style HR build: statutory payroll, ESSL attendance, leave, recruitment pipelines, Meta/WhatsApp/email, AI governance | 🟡 planned | P0–P7 |
 | 09 | [PROJECTS](09-PROJECTS.md) | Time entries, billing, milestones, profitability | ✅ | — |

@@ -18,7 +18,8 @@ from app.core.permissions_catalog import all_permission_specs, role_templates
 from app.core.security import hash_password
 from app.db.registry import Base  # noqa: F401  (ensures metadata is complete)
 from app.db.session import AsyncSessionLocal, engine
-from app.modules.crm.models import Company, Contact, Deal, Lead
+from app.modules.crm.models import Company, Contact, Deal, Lead, Stage
+from app.modules.crm.service import rescore_lead, seed_default_pipeline
 from app.modules.finance.models import Account, Invoice, Payment
 from app.modules.hr.models import Department, Employee
 from app.modules.identity.models import Permission, Role, Tenant, User
@@ -192,6 +193,7 @@ async def seed_settings(db, tenant: Tenant) -> None:
 
 async def provision_tenant_defaults(db, tenant: Tenant) -> None:
     await seed_settings(db, tenant)
+    await seed_default_pipeline(db, tenant.id)
 
 
 async def seed_sequences(db, tenant: Tenant) -> None:
@@ -393,20 +395,27 @@ async def seed_demo(db, tenant: Tenant, admin: User) -> None:
     )
     db.add(company)
     await db.flush()
-    db.add_all(
-        [
-            Contact(company_id=company.id, first_name="Meera", last_name="Rao", email="meera@auroraboutique.in", phone="+91 98450 11223", title="Founder", whatsapp_opt_in=True, **common),
-            Lead(name="Rahul Menon", company_name="Dapper Studio", email="rahul@dapperstudio.in", source="instagram", status="qualified", score=78, estimated_value=Decimal("125000"), whatsapp_opt_in=True, next_follow_up=today + timedelta(days=2), **common),
-            Lead(name="Sana Kapoor", company_name="Threadline", email="sana@threadline.in", source="referral", status="new", score=55, estimated_value=Decimal("64000"), **common),
-        ]
+    contact = Contact(company_id=company.id, first_name="Meera", last_name="Rao", email="meera@auroraboutique.in", phone="+91 98450 11223", title="Founder", whatsapp_opt_in=True, **common)
+    leads = [
+        Lead(name="Rahul Menon", company_name="Dapper Studio", email="rahul@dapperstudio.in", source="instagram", status="qualified", score=78, estimated_value=Decimal("125000"), whatsapp_opt_in=True, next_follow_up=today + timedelta(days=2), **common),
+        Lead(name="Sana Kapoor", company_name="Threadline", email="sana@threadline.in", source="referral", status="new", score=55, estimated_value=Decimal("64000"), **common),
+    ]
+    db.add_all([contact, *leads])
+    await db.flush()
+    for lead in leads:
+        await rescore_lead(db, lead, user=admin, commit=False)
+    negotiation = await db.scalar(
+        select(Stage).where(Stage.tenant_id == tenant.id, Stage.code == "negotiation")
     )
     db.add(
         Deal(
             name="Aurora Festive Drop",
             company_id=company.id,
             stage="negotiation",
+            stage_id=negotiation.id if negotiation else None,
             amount=Decimal("450000"),
             probability=65,
+            weighted_amount=Decimal("292500"),
             expected_close_date=today + timedelta(days=20),
             owner_id=admin.id,
             **common,

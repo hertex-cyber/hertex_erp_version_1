@@ -151,6 +151,12 @@ const RAW_NAV_GROUPS = [
       { label: 'Leads', to: '/crm/leads', icon: Target, permission: 'crm.lead.read' },
       { label: 'Deals', to: '/crm/deals', icon: Handshake, permission: 'crm.deal.read' },
       { label: 'Activities', to: '/crm/activities', icon: Activity, permission: 'crm.activity.read' },
+      { label: 'Unified inbox', to: '/crm/inbox', icon: Inbox, permission: 'crm.inbox.read' },
+      { label: 'Calls', to: '/crm/calls', icon: MessageSquare, permission: 'crm.call.read' },
+      { label: 'AI call assessments', to: '/crm/call-assessments', icon: Sparkles, permission: 'crm.call.read' },
+      { label: 'Social accounts', to: '/crm/social/accounts', icon: Send, permission: 'crm.socialaccount.read' },
+      { label: 'Social posts', to: '/crm/social/posts', icon: Megaphone, permission: 'crm.socialpost.read' },
+      { label: 'Pipeline report', to: '/crm/pipeline-report', icon: BarChart3, permission: 'crm.report.read' },
     ],
   },
   {

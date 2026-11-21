@@ -90,3 +90,34 @@ class WhatsAppCloudAdapter:
         error = (data.get("error") or {}).get("message") or f"HTTP {response.status_code}"
         logger.warning("WhatsApp send rejected: %s", error)
         return DeliveryResult(status="failed", detail=error)
+
+
+class MetaLeadAdapter:
+    channel = "meta_lead_ads"
+
+    def __init__(self) -> None:
+        self.token = settings.META_ACCESS_TOKEN or settings.WHATSAPP_TOKEN
+        self.api_base = settings.WHATSAPP_API_BASE.rstrip("/")
+        self.api_version = settings.WHATSAPP_API_VERSION
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.token)
+
+    async def fetch(self, leadgen_id: str) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+        url = f"{self.api_base}/{self.api_version}/{leadgen_id}"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(
+                    url, params={"access_token": self.token, "fields": "field_data,created_time"}
+                )
+        except httpx.HTTPError as exc:
+            logger.warning("Meta lead fetch failed: %s", exc)
+            return None
+        try:
+            data = response.json()
+        except ValueError:
+            return None
+        return data if response.is_success and isinstance(data, dict) else None

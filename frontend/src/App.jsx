@@ -23,6 +23,12 @@ const ContactsPage = lazy(() => import('./pages/resources/crm').then((module) =>
 const LeadsPage = lazy(() => import('./pages/resources/crm').then((module) => ({ default: module.LeadsPage })))
 const DealsPage = lazy(() => import('./pages/resources/crm').then((module) => ({ default: module.DealsPage })))
 const ActivitiesPage = lazy(() => import('./pages/resources/crm').then((module) => ({ default: module.ActivitiesPage })))
+const InboxPage = lazy(() => import('./pages/resources/crm').then((module) => ({ default: module.InboxPage })))
+const CallsPage = lazy(() => import('./pages/resources/crm').then((module) => ({ default: module.CallsPage })))
+const CallAssessmentsPage = lazy(() => import('./pages/resources/crm').then((module) => ({ default: module.CallAssessmentsPage })))
+const SocialAccountsPage = lazy(() => import('./pages/resources/crm').then((module) => ({ default: module.SocialAccountsPage })))
+const SocialPostsPage = lazy(() => import('./pages/resources/crm').then((module) => ({ default: module.SocialPostsPage })))
+const PipelineReportPage = lazy(() => import('./pages/resources/crm').then((module) => ({ default: module.PipelineReportPage })))
 
 const CategoriesPage = lazy(() => import('./pages/resources/inventory').then((module) => ({ default: module.CategoriesPage })))
 const ProductsPage = lazy(() => import('./pages/resources/inventory').then((module) => ({ default: module.ProductsPage })))
@@ -239,6 +245,12 @@ export default function App() {
           <Route path="/crm/leads" element={<Page><LeadsPage /></Page>} />
           <Route path="/crm/deals" element={<Page><DealsPage /></Page>} />
           <Route path="/crm/activities" element={<Page><ActivitiesPage /></Page>} />
+          <Route path="/crm/inbox" element={<Page><InboxPage /></Page>} />
+          <Route path="/crm/calls" element={<Page><CallsPage /></Page>} />
+          <Route path="/crm/call-assessments" element={<Page><CallAssessmentsPage /></Page>} />
+          <Route path="/crm/social/accounts" element={<Page><SocialAccountsPage /></Page>} />
+          <Route path="/crm/social/posts" element={<Page><SocialPostsPage /></Page>} />
+          <Route path="/crm/pipeline-report" element={<Page><PipelineReportPage /></Page>} />
 
           <Route path="/sales/orders" element={<Page><SalesOrdersPage /></Page>} />
           <Route path="/sales/customers" element={<Page><CustomersPage /></Page>} />
