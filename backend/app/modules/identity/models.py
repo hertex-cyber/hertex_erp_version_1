@@ -118,6 +118,10 @@ class User(BaseModel):
         secondary=user_roles, back_populates="users", lazy="selectin"
     )
 
+    @property
+    def tenant_name(self) -> Optional[str]:
+        return self.tenant.name if self.tenant else None
+
     def permission_codes(self) -> set[str]:
         return {
             perm.code

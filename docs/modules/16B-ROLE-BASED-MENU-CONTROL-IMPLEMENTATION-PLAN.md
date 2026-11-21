@@ -107,7 +107,14 @@ Add a route access guard that resolves the closest matching nav descriptor and d
 
 ---
 
-## 6. Risks and mitigations
+## 6. Workspace scoping hardening
+
+- `GET /users` now defaults every caller to their own workspace, including superadmins; explicit `tenant_scope=all` is required for a global admin list.
+- Non-superusers cannot override `tenant_id`; superadmins may filter or create users in an explicit workspace.
+- The Team screen sends the current workspace filter, shows a Workspace column and superadmin-only workspace controls, and hides account creation in another tenant from non-superusers.
+- Demo credential autofill is shown only in local development or when `VITE_SHOW_DEMO_LOGIN=true`.
+
+## 7. Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|

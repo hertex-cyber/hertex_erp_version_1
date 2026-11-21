@@ -13,7 +13,13 @@ from sqlalchemy.orm import selectinload
 from app.core.audit import record_audit
 from app.core.config import settings
 from app.core.deps import get_current_user, require_permissions, require_superuser
-from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
+from app.core.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    UnauthorizedError,
+    ValidationError,
+)
 from app.core.menu_catalog import MENU_MODULES, effective_menus, normalize_menu_keys
 from app.core.ratelimit import check_rate_limit
 from app.core.schemas import Message, Page
@@ -685,17 +691,26 @@ async def list_users(
     size: int = Query(50, ge=1, le=200),
     q: Optional[str] = None,
     tenant_id: Optional[uuid.UUID] = None,
+    tenant_scope: str = "workspace",
     user: User = Depends(manage_users),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(User).options(*USER_LOAD)
     count_stmt = select(func.count()).select_from(User)
-    if not user.is_superuser:
-        stmt = stmt.where(User.tenant_id == user.tenant_id)
-        count_stmt = count_stmt.where(User.tenant_id == user.tenant_id)
-    elif tenant_id:
-        stmt = stmt.where(User.tenant_id == tenant_id)
-        count_stmt = count_stmt.where(User.tenant_id == tenant_id)
+    scoped_tenant_id = user.tenant_id
+    if user.is_superuser:
+        if tenant_scope == "all":
+            scoped_tenant_id = None
+        elif tenant_scope not in ("workspace", ""):
+            try:
+                scoped_tenant_id = uuid.UUID(tenant_scope)
+            except ValueError as exc:
+                raise ValidationError("Invalid tenant scope") from exc
+    if tenant_id and user.is_superuser and tenant_scope in ("workspace", ""):
+        scoped_tenant_id = tenant_id
+    if scoped_tenant_id is not None:
+        stmt = stmt.where(User.tenant_id == scoped_tenant_id)
+        count_stmt = count_stmt.where(User.tenant_id == scoped_tenant_id)
     if q:
         pattern = f"%{q}%"
         clause = or_(User.email.ilike(pattern), User.full_name.ilike(pattern))
@@ -708,12 +723,18 @@ async def list_users(
     return {"items": users, "total": total, "page": page, "size": size, "pages": max(1, math.ceil(total / size))}
 
 
-async def _resolve_roles(db: AsyncSession, user: User, role_ids: list[uuid.UUID]) -> list[Role]:
+async def _resolve_roles(
+    db: AsyncSession,
+    user: User,
+    role_ids: list[uuid.UUID],
+    tenant_id: Optional[uuid.UUID] = None,
+) -> list[Role]:
     if not role_ids:
         return []
     roles = list((await db.scalars(select(Role).where(Role.id.in_(role_ids)))).all())
+    target_tenant_id = tenant_id or user.tenant_id
     for role in roles:
-        if role.tenant_id is not None and role.tenant_id != user.tenant_id and not user.is_superuser:
+        if role.tenant_id is not None and role.tenant_id != target_tenant_id:
             raise ForbiddenError("Cannot assign a role from another tenant")
     return roles
 
@@ -729,9 +750,17 @@ async def create_user(
     if await _get_user_by_email(db, email):
         raise ConflictError("A user with this email already exists")
     validate_password_policy(payload.password, email=email, full_name=payload.full_name)
-    roles = await _resolve_roles(db, actor, payload.role_ids)
+    tenant_id = actor.tenant_id
+    if payload.tenant_id and payload.tenant_id != tenant_id:
+        if not actor.is_superuser:
+            raise ForbiddenError("Cannot create a user in another tenant")
+        tenant = await db.get(Tenant, payload.tenant_id)
+        if tenant is None or not tenant.is_active:
+            raise NotFoundError("Tenant not found")
+        tenant_id = payload.tenant_id
+    roles = await _resolve_roles(db, actor, payload.role_ids, tenant_id)
     db_user = User(
-        tenant_id=actor.tenant_id,
+        tenant_id=tenant_id,
         email=email,
         hashed_password=hash_password(payload.password),
         password_changed_at=datetime.now(timezone.utc),
@@ -777,7 +806,7 @@ async def update_user(
     for field, value in data.items():
         setattr(db_user, field, value)
     if payload.role_ids is not None:
-        db_user.roles = await _resolve_roles(db, actor, payload.role_ids)
+        db_user.roles = await _resolve_roles(db, actor, payload.role_ids, db_user.tenant_id)
     await record_audit(
         db,
         user=actor,

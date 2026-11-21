@@ -67,6 +67,7 @@ class RoleRead(ORMModel):
 class UserRead(ORMModel):
     id: UUID
     tenant_id: Optional[UUID] = None
+    tenant_name: Optional[str] = None
     email: EmailStr
     full_name: str
     phone: Optional[str] = None
@@ -85,6 +86,7 @@ class UserCreate(ORMModel):
     full_name: str = Field(min_length=1, max_length=200)
     phone: Optional[str] = None
     role_ids: list[UUID] = []
+    tenant_id: Optional[UUID] = None
     is_active: bool = True
 
 

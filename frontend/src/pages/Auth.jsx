@@ -7,6 +7,8 @@ import { useAuth } from '../store/auth'
 import { toast } from '../store/toast'
 import { Spinner } from '../components/ui'
 
+const showDemoLogin = import.meta.env.DEV || import.meta.env.VITE_SHOW_DEMO_LOGIN === 'true'
+
 function AuthArtwork() {
   return (
     <div className="forest-grid relative hidden min-h-screen flex-col justify-between overflow-hidden p-10 lg:flex xl:p-14">
@@ -197,11 +199,13 @@ export function LoginPage() {
             </button>
           </form>
 
-          <button type="button" onClick={useDemo} className="mt-4 w-full rounded-xl border border-dashed border-line bg-surface-2 px-4 py-3 text-left transition hover:border-primary/30">
-            <span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-muted">Demo workspace</span>
-            <span className="mt-1 block text-xs font-semibold text-ink-soft">admin@hertex.dev · Admin@12345</span>
-            <span className="mt-0.5 block text-[10px] text-muted">Click to fill the form automatically.</span>
-          </button>
+          {showDemoLogin && (
+            <button type="button" onClick={useDemo} className="mt-4 w-full rounded-xl border border-dashed border-line bg-surface-2 px-4 py-3 text-left transition hover:border-primary/30">
+              <span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-muted">Demo workspace</span>
+              <span className="mt-1 block text-xs font-semibold text-ink-soft">admin@hertex.dev · Admin@12345</span>
+              <span className="mt-0.5 block text-[10px] text-muted">Click to fill the form automatically.</span>
+            </button>
+          )}
         </>
       ) : (
         <>

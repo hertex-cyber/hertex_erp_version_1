@@ -9,6 +9,7 @@ const emptySession = {
   roles: [],
   menus: [],
   featureFlags: {},
+  tenantId: null,
   isSuperuser: false,
 }
 
@@ -66,6 +67,7 @@ export const useAuth = create((set, get) => ({
       roles: data.roles ?? [],
       menus: data.menus ?? [],
       featureFlags: data.feature_flags ?? {},
+      tenantId: data.tenant_id ?? null,
       isSuperuser: Boolean(data.is_superuser),
     })
   },

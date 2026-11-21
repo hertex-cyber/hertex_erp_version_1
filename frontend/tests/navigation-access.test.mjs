@@ -71,6 +71,23 @@ test('role administration exposes menu access selection', () => {
   assert.match(read('../src/store/auth.js'), /featureFlags: data\.feature_flags \?\? \{\}/)
 })
 
+test('workspace team list is tenant scoped with superadmin workspace controls', () => {
+  const auth = read('../src/store/auth.js')
+  assert.match(auth, /tenantId: data\.tenant_id \?\? null/)
+  const source = read('../src/pages/resources/settings.jsx')
+  assert.match(source, /defaultFilters=\{defaultFilters\}/)
+  assert.match(source, /isSuperuser && tenantId \? \{ tenant_scope: tenantId \}/)
+  assert.match(source, /name: 'tenant_scope'[\s\S]*All workspaces[\s\S]*\.\.\.tenants/)
+  assert.match(source, /row\.tenant_name/)
+  assert.match(read('../src/lib/lookups.js'), /tenants: \{ endpoint: '\/system\/tenants'/)
+})
+
+test('demo credential autofill is gated outside local development', () => {
+  const source = read('../src/pages/Auth.jsx')
+  assert.match(source, /import\.meta\.env\.DEV \|\| import\.meta\.env\.VITE_SHOW_DEMO_LOGIN === 'true'/)
+  assert.match(source, /\{showDemoLogin && \(/)
+})
+
 test('brand surfaces use the supplied logo asset', () => {
   assert.ok(existsSync(new URL('../public/logo-transparent-bg.png', import.meta.url)))
   assert.match(read('../src/components/BrandLogo.jsx'), /\/logo-transparent-bg\.png/)
