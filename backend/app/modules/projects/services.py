@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import publish
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
-from app.core.numbering import next_number as legacy_next_number
 from app.modules.finance.service import create_invoice_from_proposal
 from app.modules.hr.models import Employee, LeaveRequest
 from app.modules.identity.models import User
@@ -24,7 +23,6 @@ from app.modules.projects.schemas import (
     CriticalPathStep,
     WorkloadRow,
 )
-from app.modules.settings.models import NumberSequence
 
 SENSITIVE_FIELDS = {
     "Project": {
@@ -546,59 +544,28 @@ async def sequence_number(
     key: str,
     prefix: str,
     width: int = 5,
+    on_date=None,
 ) -> str:
-    stmt = select(NumberSequence).where(
-        NumberSequence.key == key,
-        NumberSequence.tenant_id == user.tenant_id,
+    """Project numbering goes through the shared engine with a full commit trail."""
+    from app.modules.settings.numbering import allocate_document, commit
+
+    allocated = await allocate_document(
+        db,
+        tenant_id=user.tenant_id,
+        key=key,
+        prefix=prefix,
+        user=user,
+        on_date=on_date,
+        document_type=key,
     )
-    if hasattr(select(NumberSequence), "with_for_update"):
-        stmt = stmt.with_for_update()
-    sequence = await db.scalar(stmt)
-    if sequence is None:
-        sequence = NumberSequence(
-            tenant_id=user.tenant_id,
-            created_by_id=user.id,
-            key=key,
-            prefix=prefix,
-            next_number=1,
-            padding=width,
-        )
-        db.add(sequence)
-        await db.flush()
-    model_by_key = {
-        "project": (m.Project, "number"),
-        "work_item": (m.Task, "number"),
-        "sprint": (m.ProjectSprint, "number"),
-    }
-    mapping = model_by_key.get(key)
-    existing_max = 0
-    if mapping is not None:
-        model, field = mapping
-        number_stmt = select(getattr(model, field)).where(
-            getattr(model, field).like(f"{prefix}%")
-        )
-        if user.tenant_id:
-            number_stmt = number_stmt.where(model.tenant_id == user.tenant_id)
-        for existing_number in (await db.scalars(number_stmt)).all():
-            suffix = str(existing_number)[len(prefix) :].lstrip("-")
-            if suffix.isdigit():
-                existing_max = max(existing_max, int(suffix))
-    value = max(sequence.next_number or 1, existing_max + 1)
-    sequence.next_number = value + 1
-    sequence.prefix = prefix
-    sequence.padding = width
-    await db.flush()
-    return f"{prefix}-{value:0{width}d}"
-
-
-async def legacy_number(
-    db: AsyncSession,
-    user: User,
-    model: Any,
-    field: str,
-    prefix: str,
-) -> str:
-    return await legacy_next_number(db, model, field, prefix, user.tenant_id)
+    await commit(
+        db,
+        allocated,
+        document_type=key,
+        document_id=None,
+        user=user,
+    )
+    return allocated.rendered
 
 
 async def get_or_404(db: AsyncSession, user: User, model: Any, item_id: UUID) -> Any:

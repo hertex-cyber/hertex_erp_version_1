@@ -1655,7 +1655,7 @@ async def outbox_stats(
 
 @router.post("/outbox/dispatch")
 async def dispatch_project_outbox(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(200, ge=1, le=1000),
     request: Request = None,
     user: User = Depends(require_permissions("projects.outbox.dispatch")),
     db: AsyncSession = Depends(get_db),
@@ -2208,6 +2208,7 @@ def _include(
     filter_fields: tuple[str, ...] = (),
     number_field: Optional[str] = None,
     number_prefix: Optional[str] = None,
+    number_key: Optional[str] = None,
     base_path: str = "",
 ) -> None:
     immutable = model.__name__ in IMMUTABLE_MODELS
@@ -2263,6 +2264,7 @@ def _include(
         filter_fields=filter_fields,
         number_field=number_field,
         number_prefix=number_prefix,
+        number_key=number_key,
         serializer=lambda obj, user, model=model: _serialize(model, obj, user),
         base_path=base_path,
         immutable=immutable,
@@ -2273,14 +2275,14 @@ def _include(
     router.include_router(child)
 
 
-_include(m.Task, "/tasks", "projects.task", "task", search_fields=("title", "number"), filter_fields=("project_id", "status", "assignee_id", "sprint_id"), number_field="number", number_prefix="PRJ-T")
+_include(m.Task, "/tasks", "projects.task", "task", search_fields=("title", "number"), filter_fields=("project_id", "status", "assignee_id", "sprint_id"), number_field="number", number_prefix="PRJ-T", number_key="work_item")
 _include(m.ProjectPortfolio, "/portfolios", "projects.portfolio", "portfolio", search_fields=("name", "code"), filter_fields=("status", "health"))
 _include(m.ProjectProgram, "/programs", "projects.program", "program", search_fields=("name", "code"), filter_fields=("status", "portfolio_id"))
 _include(m.ProjectPhase, "/phases", "projects.phase", "phase", search_fields=("name",), filter_fields=("project_id", "status"))
-_include(m.ProjectSprint, "/sprints", "projects.sprint", "sprint", search_fields=("name", "number"), filter_fields=("project_id", "status"), number_field="number", number_prefix="SPR")
+_include(m.ProjectSprint, "/sprints", "projects.sprint", "sprint", search_fields=("name", "number"), filter_fields=("project_id", "status"), number_field="number", number_prefix="SPR", number_key="sprint")
 _include(m.ProjectBoard, "/boards", "projects.board", "board", search_fields=("name",), filter_fields=("project_id", "status"))
 _include(m.ProjectBoardColumn, "/board-columns", "projects.boardcolumn", "board_column", search_fields=("name",), filter_fields=("board_id", "status_category"))
-_include(m.Task, "/work-items", "projects.workitem", "work_item", search_fields=("title", "number"), filter_fields=("project_id", "status", "work_item_type", "assignee_id", "sprint_id", "board_id"), number_field="number", number_prefix="PRJ-T")
+_include(m.Task, "/work-items", "projects.workitem", "work_item", search_fields=("title", "number"), filter_fields=("project_id", "status", "work_item_type", "assignee_id", "sprint_id", "board_id"), number_field="number", number_prefix="PRJ-T", number_key="work_item")
 _include(m.ProjectWorkItemLink, "/work-item-links", "projects.workitemlink", "work_item_link", filter_fields=("work_item_id", "linked_work_item_id", "link_type"))
 _include(m.ProjectLabel, "/labels", "projects.label", "label", search_fields=("name",), filter_fields=("project_id", "status"))
 _include(m.ProjectWorkItemLabel, "/work-item-labels", "projects.label", "work_item_label", filter_fields=("work_item_id", "label_id"))
@@ -2327,4 +2329,4 @@ _include(m.ProjectImportBatch, "/import-batches", "projects.importbatch", "impor
 _include(m.ProjectAiSignal, "/ai-signals", "projects.aisignal", "ai_signal", filter_fields=("entity_type", "entity_id", "signal_type", "review_status"))
 _include(m.ProjectAiAction, "/ai-actions", "projects.aiaction", "ai_action", filter_fields=("action_type", "entity_type", "entity_id", "status"))
 _include(m.ProjectOutboxEvent, "/outbox", "projects.outbox", "outbox_event", filter_fields=("event_name", "status"))
-_include(m.Project, "", "projects.project", "project", search_fields=("name", "code", "number"), filter_fields=("status", "health", "priority", "portfolio_id", "program_id"), number_field="number", number_prefix="PRJ", base_path="/")
+_include(m.Project, "", "projects.project", "project", search_fields=("name", "code", "number"), filter_fields=("status", "health", "priority", "portfolio_id", "program_id"), number_field="number", number_prefix="PRJ", number_key="project", base_path="/")

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +26,13 @@ class Vendor(TenantBaseModel):
 
 class PurchaseRequisition(TenantBaseModel):
     __tablename__ = "procurement_requisitions"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "requisition_number",
+            name="uq_procurement_requisitions_tenant_number",
+        ),
+    )
 
     requisition_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     requested_by_id: Mapped[Optional[UUID]] = mapped_column(
@@ -39,6 +46,13 @@ class PurchaseRequisition(TenantBaseModel):
 
 class PurchaseOrder(TenantBaseModel):
     __tablename__ = "procurement_purchase_orders"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "po_number",
+            name="uq_procurement_purchase_orders_tenant_number",
+        ),
+    )
 
     po_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     vendor_id: Mapped[UUID] = mapped_column(
@@ -85,6 +99,13 @@ class POLine(TenantBaseModel):
 
 class GoodsReceipt(TenantBaseModel):
     __tablename__ = "procurement_goods_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "grn_number",
+            name="uq_procurement_goods_receipts_tenant_number",
+        ),
+    )
 
     grn_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     journal_entry_id: Mapped[Optional[UUID]] = mapped_column(
@@ -123,6 +144,13 @@ class GoodsReceiptLine(TenantBaseModel):
 
 class VendorInvoice(TenantBaseModel):
     __tablename__ = "procurement_vendor_invoices"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "invoice_number",
+            name="uq_procurement_vendor_invoices_tenant_number",
+        ),
+    )
 
     invoice_number: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     vendor_id: Mapped[UUID] = mapped_column(

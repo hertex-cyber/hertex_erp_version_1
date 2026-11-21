@@ -5,7 +5,9 @@ tenant isolation and audit logging without copying boilerplate.
 """
 
 import math
+import re
 from collections.abc import Awaitable, Callable, Sequence
+from datetime import date, datetime
 from typing import Any, Optional
 from uuid import UUID
 
@@ -38,6 +40,31 @@ def coerce_identifier(value: Any, entity: str = "Record") -> UUID:
         raise NotFoundError(f"{entity} not found") from exc
 
 
+DATE_FIELDS = (
+    "issue_date",
+    "order_date",
+    "entry_date",
+    "transaction_date",
+    "dispatched_date",
+    "received_date",
+    "due_date",
+    "start_date",
+    "date",
+)
+
+
+def document_date(data: dict[str, Any]):
+    for field in DATE_FIELDS:
+        value = data.get(field)
+        if isinstance(value, date):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", value):
+            return date.fromisoformat(value[:10])
+    return None
+
+
 class CRUDService:
     def __init__(
         self,
@@ -49,6 +76,7 @@ class CRUDService:
         soft_delete: bool = True,
         number_field: Optional[str] = None,
         number_prefix: Optional[str] = None,
+        number_key: Optional[str] = None,
         immutable: bool = False,
     ):
         self.model = model
@@ -58,6 +86,7 @@ class CRUDService:
         self.soft_delete = soft_delete
         self.number_field = number_field
         self.number_prefix = number_prefix
+        self.number_key = number_key
         self.immutable = immutable
 
     def base_select(self, user: User) -> Select:
@@ -125,19 +154,33 @@ class CRUDService:
             data["tenant_id"] = user.tenant_id
         if hasattr(self.model, "created_by_id") and "created_by_id" not in data:
             data["created_by_id"] = user.id
+        number = None
         if self.number_field and not data.get(self.number_field):
-            from app.core.numbering import next_number
+            from app.modules.settings.numbering import document_number
 
-            data[self.number_field] = await next_number(
+            number = await document_number(
                 db,
-                self.model,
-                self.number_field,
-                self.number_prefix or "DOC",
-                user.tenant_id,
+                key=self.number_key,
+                prefix=self.number_prefix or "DOC",
+                tenant_id=user.tenant_id,
+                user=user,
+                on_date=document_date(data),
+                document_type=self.model.__name__,
             )
+            data[self.number_field] = number
         obj = self.model(**data)
         db.add(obj)
         await db.flush()
+        if number is not None:
+            from app.modules.settings.numbering import commit
+
+            await commit(
+                db,
+                number,
+                document_type=self.model.__name__,
+                document_id=obj.id,
+                user=user,
+            )
         return obj
 
     async def update(self, db: AsyncSession, user: User, item_id: Any, data: dict[str, Any]) -> Any:
@@ -178,6 +221,7 @@ def build_crud_router(
     soft_delete: bool = True,
     number_field: Optional[str] = None,
     number_prefix: Optional[str] = None,
+    number_key: Optional[str] = None,
     serializer: Optional[Callable[[Any, User], dict[str, Any]]] = None,
     base_path: str = "",
     create_enabled: bool = True,
@@ -203,6 +247,7 @@ def build_crud_router(
         soft_delete=soft_delete,
         number_field=number_field,
         number_prefix=number_prefix,
+        number_key=number_key,
         immutable=immutable,
     )
 

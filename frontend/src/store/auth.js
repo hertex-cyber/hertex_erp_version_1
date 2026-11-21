@@ -9,6 +9,8 @@ const emptySession = {
   isSuperuser: false,
 }
 
+let bootstrapPromise = null
+
 function applyTokens(data) {
   setAccessToken(data.access_token)
 }
@@ -60,28 +62,34 @@ export const useAuth = create((set, get) => ({
     })
   },
 
-  bootstrap: async () => {
-    try {
-      if (!hasSessionCookie() && !getAccessToken()) {
+  bootstrap: () => {
+    if (bootstrapPromise) return bootstrapPromise
+    bootstrapPromise = (async () => {
+      try {
+        if (!hasSessionCookie() && !getAccessToken()) {
+          set({ ...emptySession, loading: false })
+          return
+        }
+        if (!getAccessToken()) {
+          const csrf = getCsrfToken()
+          const { data } = await api.post(
+            '/auth/refresh',
+            {},
+            { headers: csrf ? { 'X-CSRF-Token': csrf } : {} },
+          )
+          applyTokens(data)
+        }
+        const { data } = await api.get('/auth/me')
+        set({ user: data, loading: false })
+        await get().loadPermissions()
+      } catch {
+        clearTokens()
         set({ ...emptySession, loading: false })
-        return
       }
-      if (!getAccessToken()) {
-        const csrf = getCsrfToken()
-        const { data } = await api.post(
-          '/auth/refresh',
-          {},
-          { headers: csrf ? { 'X-CSRF-Token': csrf } : {} },
-        )
-        applyTokens(data)
-      }
-      const { data } = await api.get('/auth/me')
-      set({ user: data, loading: false })
-      await get().loadPermissions()
-    } catch {
-      clearTokens()
-      set({ ...emptySession, loading: false })
-    }
+    })().finally(() => {
+      bootstrapPromise = null
+    })
+    return bootstrapPromise
   },
 
   changePassword: async (currentPassword, newPassword) => {

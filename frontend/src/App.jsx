@@ -39,6 +39,7 @@ const VendorInvoicesPage = lazy(() => import('./pages/resources/procurement').th
 const InvoicesPage = lazy(() => import('./pages/finance/Registers').then((module) => ({ default: module.InvoicesPage })))
 const PaymentsPage = lazy(() => import('./pages/finance/Registers').then((module) => ({ default: module.PaymentsPage })))
 const AccountsPage = lazy(() => import('./pages/finance/Registers').then((module) => ({ default: module.AccountsPage })))
+const AccountGroupsPage = lazy(() => import('./pages/finance/Registers').then((module) => ({ default: module.AccountGroupsPage })))
 const JournalEntriesPage = lazy(() => import('./pages/finance/Registers').then((module) => ({ default: module.JournalEntriesPage })))
 const PeriodsPage = lazy(() => import('./pages/finance/Registers').then((module) => ({ default: module.PeriodsPage })))
 const BankAccountsPage = lazy(() => import('./pages/finance/Registers').then((module) => ({ default: module.BankAccountsPage })))
@@ -46,6 +47,28 @@ const VendorPaymentsPage = lazy(() => import('./pages/finance/VendorPaymentsPage
 const BankReconciliationPage = lazy(() => import('./pages/finance/BankReconciliationPage'))
 const GSTPage = lazy(() => import('./pages/finance/GSTPage'))
 const ApprovalsPage = lazy(() => import('./pages/finance/ApprovalsPage'))
+const FixedAssetsPage = lazy(() => import('./pages/finance/FixedAssetsPage'))
+const BankFeedsPage = lazy(() =>
+  import('./pages/finance/CompliancePages').then((module) => ({ default: module.BankFeedsPage })),
+)
+const ControlPlanePage = lazy(() =>
+  import('./pages/finance/CompliancePages').then((module) => ({ default: module.ControlPlanePage })),
+)
+const StatutoryPage = lazy(() =>
+  import('./pages/finance/CompliancePages').then((module) => ({ default: module.StatutoryPage })),
+)
+const ConsolidationPage = lazy(() =>
+  import('./pages/finance/DimensionsConsolidationPages').then((module) => ({ default: module.ConsolidationPage })),
+)
+const DimensionsPage = lazy(() =>
+  import('./pages/finance/DimensionsConsolidationPages').then((module) => ({ default: module.DimensionsPage })),
+)
+const FinanceBudgetsPage = lazy(() =>
+  import('./pages/finance/DimensionsConsolidationPages').then((module) => ({ default: module.FinanceBudgetsPage })),
+)
+const ExtendedReportsPage = lazy(() => import('./pages/finance/ExtendedReportsPage'))
+const ExternalIntegrationsPage = lazy(() => import('./pages/finance/ExternalIntegrationsPage'))
+const OcrInboxPage = lazy(() => import('./pages/finance/OcrInboxPage'))
 
 const EmployeesPage = lazy(() => import('./pages/resources/hr').then((module) => ({ default: module.EmployeesPage })))
 const DepartmentsPage = lazy(() => import('./pages/resources/hr').then((module) => ({ default: module.DepartmentsPage })))
@@ -126,8 +149,16 @@ const CampaignsPage = lazy(() => import('./pages/resources/marketing').then((mod
 const SegmentsPage = lazy(() => import('./pages/resources/marketing').then((module) => ({ default: module.SegmentsPage })))
 const CampaignSendsPage = lazy(() => import('./pages/resources/marketing').then((module) => ({ default: module.CampaignSendsPage })))
 
-const SettingsValuesPage = lazy(() => import('./pages/resources/settings').then((module) => ({ default: module.SettingsValuesPage })))
-const SequencesPage = lazy(() => import('./pages/resources/settings').then((module) => ({ default: module.SequencesPage })))
+const SettingsHubPage = lazy(() => import('./pages/settings/SettingsHubPage'))
+const OrganisationPage = lazy(() => import('./pages/settings/OrganisationPage'))
+const LocalisationPage = lazy(() => import('./pages/settings/LocalisationPage'))
+const ModulesPage = lazy(() => import('./pages/settings/ModulesPage'))
+const SettingsValuesPage = lazy(() => import('./pages/settings/ValuesPage'))
+const SequencesPage = lazy(() => import('./pages/settings/NumberingPage'))
+const NumberingGapsPage = lazy(() => import('./pages/settings/GapsPage'))
+const NumberingBlocksPage = lazy(() => import('./pages/settings/BlocksPage'))
+const SecretsPage = lazy(() => import('./pages/settings/SecretsPage'))
+const SettingsHistoryPage = lazy(() => import('./pages/settings/HistoryPage'))
 const UsersPage = lazy(() => import('./pages/resources/settings').then((module) => ({ default: module.UsersPage })))
 const RolesPage = lazy(() => import('./pages/resources/settings').then((module) => ({ default: module.RolesPage })))
 
@@ -209,19 +240,31 @@ export default function App() {
           <Route path="/procurement/requisitions" element={<Page><RequisitionsPage /></Page>} />
           <Route path="/procurement/purchase-orders" element={<Page><PurchaseOrdersPage /></Page>} />
           <Route path="/procurement/vendor-invoices" element={<Page><VendorInvoicesPage /></Page>} />
+          <Route path="/procurement/ocr-inbox" element={<Navigate to="/finance/ocr-inbox" replace />} />
 
           <Route path="/finance" element={<Page><FinanceDashboard /></Page>} />
           <Route path="/finance/invoices" element={<Page><InvoicesPage /></Page>} />
           <Route path="/finance/payments" element={<Page><PaymentsPage /></Page>} />
           <Route path="/finance/vendor-payments" element={<Page><VendorPaymentsPage /></Page>} />
+          <Route path="/finance/ocr-inbox" element={<Page><OcrInboxPage /></Page>} />
           <Route path="/finance/approvals" element={<Page><ApprovalsPage /></Page>} />
           <Route path="/finance/bank-reconciliation" element={<Page><BankReconciliationPage /></Page>} />
           <Route path="/finance/gst" element={<Page><GSTPage /></Page>} />
           <Route path="/finance/accounts" element={<Page><AccountsPage /></Page>} />
+          <Route path="/finance/account-groups" element={<Page><AccountGroupsPage /></Page>} />
           <Route path="/finance/journal-entries" element={<Page><JournalEntriesPage /></Page>} />
           <Route path="/finance/periods" element={<Page><PeriodsPage /></Page>} />
           <Route path="/finance/bank-accounts" element={<Page><BankAccountsPage /></Page>} />
           <Route path="/finance/reports" element={<Page><Reports /></Page>} />
+          <Route path="/finance/reports/extended" element={<Page><ExtendedReportsPage /></Page>} />
+          <Route path="/finance/assets" element={<Page><FixedAssetsPage /></Page>} />
+          <Route path="/finance/control-plane" element={<Page><ControlPlanePage /></Page>} />
+          <Route path="/finance/statutory" element={<Page><StatutoryPage /></Page>} />
+          <Route path="/finance/bank-feeds" element={<Page><BankFeedsPage /></Page>} />
+          <Route path="/finance/external-integrations" element={<Page><ExternalIntegrationsPage /></Page>} />
+          <Route path="/finance/dimensions" element={<Page><DimensionsPage /></Page>} />
+          <Route path="/finance/consolidation" element={<Page><ConsolidationPage /></Page>} />
+          <Route path="/finance/budgets" element={<Page><FinanceBudgetsPage /></Page>} />
 
           <Route path="/hr/employees" element={<Page><EmployeesPage /></Page>} />
           <Route path="/hr/departments" element={<Page><DepartmentsPage /></Page>} />
@@ -309,9 +352,17 @@ export default function App() {
           <Route path="/marketing/segments" element={<Page><SegmentsPage /></Page>} />
           <Route path="/marketing/sends" element={<Page><CampaignSendsPage /></Page>} />
 
-          <Route path="/settings" element={<Navigate to="/settings/values" replace />} />
+          <Route path="/settings" element={<Page><SettingsHubPage /></Page>} />
+          <Route path="/settings/organisation" element={<Page><OrganisationPage /></Page>} />
+          <Route path="/settings/localisation" element={<Page><LocalisationPage /></Page>} />
+          <Route path="/settings/modules" element={<Page><ModulesPage /></Page>} />
           <Route path="/settings/values" element={<Page><SettingsValuesPage /></Page>} />
-          <Route path="/settings/sequences" element={<Page><SequencesPage /></Page>} />
+          <Route path="/settings/numbering" element={<Page><SequencesPage /></Page>} />
+          <Route path="/settings/sequences" element={<Navigate to="/settings/numbering" replace />} />
+          <Route path="/settings/numbering/gaps" element={<Page><NumberingGapsPage /></Page>} />
+          <Route path="/settings/numbering/blocks" element={<Page><NumberingBlocksPage /></Page>} />
+          <Route path="/settings/secrets" element={<Page><SecretsPage /></Page>} />
+          <Route path="/settings/history" element={<Page><SettingsHistoryPage /></Page>} />
           <Route path="/settings/users" element={<Page><UsersPage /></Page>} />
           <Route path="/settings/roles" element={<Page><RolesPage /></Page>} />
           <Route path="/settings/security" element={<Page><Security /></Page>} />

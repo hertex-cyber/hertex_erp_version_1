@@ -40,6 +40,11 @@ async def test_vendor_invoice_approval_posts_accounts_payable(client, auth):
     )
     assert approved.status_code == 200, approved.text
 
+    baseline_grni = await client.get("/api/v1/finance/reports/grni", headers=auth)
+    assert baseline_grni.status_code == 200, baseline_grni.text
+    baseline_count = baseline_grni.json()["receipt_count"]
+    baseline_total = Decimal(baseline_grni.json()["outstanding_total"])
+
     receipt = await client.post(
         f"/api/v1/procurement/purchase-orders/{po_body['id']}/receive",
         headers=auth,
@@ -53,8 +58,8 @@ async def test_vendor_invoice_approval_posts_accounts_payable(client, auth):
     assert grn["journal_entry_id"]
     open_grni = await client.get("/api/v1/finance/reports/grni", headers=auth)
     assert open_grni.status_code == 200, open_grni.text
-    assert open_grni.json()["receipt_count"] == 1
-    assert Decimal(open_grni.json()["outstanding_total"]) == Decimal("200.00")
+    assert open_grni.json()["receipt_count"] == baseline_count + 1
+    assert Decimal(open_grni.json()["outstanding_total"]) == baseline_total + Decimal("200.00")
 
     duplicate_receipt = await client.post(
         f"/api/v1/procurement/purchase-orders/{po_body['id']}/receive",
@@ -137,8 +142,8 @@ async def test_vendor_invoice_approval_posts_accounts_payable(client, auth):
     } == {"1200": ("200.00", "0.00"), "2100": ("0.00", "200.00")}
     cleared_grni = await client.get("/api/v1/finance/reports/grni", headers=auth)
     assert cleared_grni.status_code == 200, cleared_grni.text
-    assert cleared_grni.json()["receipt_count"] == 0
-    assert Decimal(cleared_grni.json()["outstanding_total"]) == Decimal("0.00")
+    assert cleared_grni.json()["receipt_count"] == baseline_count
+    assert Decimal(cleared_grni.json()["outstanding_total"]) == baseline_total
 
 
 @pytest.mark.asyncio
@@ -236,3 +241,37 @@ async def test_tally_import_creates_accounts_and_opening_journal(client, auth):
     assert repeated_body["accounts_created"] == 0
     assert repeated_body["opening_balance_posted"] is False
     assert any("already exists" in warning for warning in repeated_body["warnings"]), repeated_body
+
+
+@pytest.mark.asyncio
+async def test_tally_trial_balance_reconciliation_matches_and_reports_differences(client, auth):
+    ledger_response = await client.get(
+        "/api/v1/finance/reports/trial-balance", headers=auth
+    )
+    assert ledger_response.status_code == 200, ledger_response.text
+    netted_response = await client.get(
+        "/api/v1/finance/tally/trial-balance/export", headers=auth
+    )
+    assert netted_response.status_code == 200, netted_response.text
+    csv_rows = netted_response.text.splitlines()
+    assert len(csv_rows) == len(ledger_response.json()) + 1
+    matched = await client.post(
+        "/api/v1/finance/tally/reconcile",
+        headers=auth,
+        files={"file": ("trial-balance.csv", "\n".join(csv_rows), "text/csv")},
+    )
+    assert matched.status_code == 200, matched.text
+    assert matched.json()["external_trial_balance_balanced"] is True
+    assert matched.json()["mismatch_count"] == 0
+    assert matched.json()["matched_count"] == len(ledger_response.json())
+
+    mismatching_csv = "code,debit,credit\nUNKNOWN-ACCOUNT,25.00,0.00\n"
+    mismatch = await client.post(
+        "/api/v1/finance/tally/reconcile",
+        headers=auth,
+        files={"file": ("trial-balance.csv", mismatching_csv, "text/csv")},
+    )
+    assert mismatch.status_code == 200, mismatch.text
+    assert mismatch.json()["external_trial_balance_balanced"] is False
+    assert mismatch.json()["mismatch_count"] >= 1
+    assert any(row["status"] == "unmapped" for row in mismatch.json()["rows"])

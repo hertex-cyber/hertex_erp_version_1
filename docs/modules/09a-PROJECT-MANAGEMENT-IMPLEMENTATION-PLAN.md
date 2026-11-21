@@ -927,7 +927,7 @@ Recommended MVP slice: P0–P5 plus minimal P6 risk/status. P7–P9 follow after
 ## 18. Definition of Done
 
 - [x] Alembic migration(s) created, reversible, applied at head `f4e2c8a7b913`; `alembic check` has no PM drift. Caveat: unrelated `finance_approvals`, `finance_vendor_payments`, `procurement_vendor_invoices`, and `sales_order_lines` drift remains outside 09a; a fresh empty-DB replay was not re-executed during finalization.
-- [x] Every project/work-item field documented (§3 + `app/modules/projects/schemas.py`); FKs indexed; state guards covered by the 62 passing backend tests.
+- [x] Every project/work-item field documented (§3 + `app/modules/projects/schemas.py`); FKs indexed; state guards covered by the 27 passing Project Management backend tests.
 - [x] I1: no duplicate customer/employee/user/channel tables; cross-module effects use service calls/events.
 - [x] I3: billing/posting goes through the Finance invoice service; Projects stores links only and never writes Finance tables directly.
 - [x] I4: baselines, approved timesheets, billing lines, and audit/activity records are immutable; corrections use reversals (PM invariant tests).
@@ -945,7 +945,7 @@ Recommended MVP slice: P0–P5 plus minimal P6 risk/status. P7–P9 follow after
 - [x] Events publish through the outbox; project subscriber integration tests are green (HR/support/Finance event tests).
 - [x] OpenAPI snapshot generated and checked for breaking changes: `backend/openapi-project-management.json` + `backend/scripts/check_openapi_snapshot.py` (349 distinct PM operations; 5 duplicate POST registrations are shadowed in OpenAPI, additions allowed).
 - [x] Idempotency enforced by the shared `Idempotency-Key` middleware and state guards; repeat-call coverage is strongest for billing post, import, outbox, automation, time, and AI actions, while sprint/booking repeats rely on the guards rather than dedicated tests.
-- [ ] Playwright happy paths for delivery, Gantt, timesheet-to-invoice, HR capacity, and AI review. Caveat: not met as written — 15 Node built-in smoke/unit/source-contract tests pass instead; no new dependencies (Playwright) were allowed.
+- [ ] Playwright happy paths for delivery, Gantt, timesheet-to-invoice, HR capacity, and AI review. Caveat: browser E2E coverage is still pending; Node smoke/source-contract tests pass.
 - [x] Demo screens exist for board/backlog, Gantt, workload, profitability, and project health.
 - [ ] Performance targets met: list p95 < 300 ms at 100k work items; Gantt p95 < 1 s at 5,000 items. Caveat: targets are specified in §11.1 and code/tests, but no large-data benchmark was executed in this environment.
 - [x] Runbook covers deployment, rollback, parallel billing, import correction, Finance reconciliation, HR capacity cutover, AI governance, outbox dispatch, and incident checks: `docs/runbooks/project-management.md`.

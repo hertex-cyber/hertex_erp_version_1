@@ -1,5 +1,6 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
@@ -499,3 +500,342 @@ async def test_bank_statement_import_deduplicates_and_requires_match_before_reco
     )
     assert unlinked.status_code == 200, unlinked.text
     assert unlinked.json()["matched_journal_line_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_statement_signoff_requires_reconciled_balanced_ledger(client, auth):
+    accounts_response = await client.get("/api/v1/finance/accounts", headers=auth)
+    accounts = {row["code"]: row["id"] for row in accounts_response.json()["items"]}
+    invoice = await client.post(
+        "/api/v1/finance/invoices",
+        headers=auth,
+        json={
+            "issue_date": date.today().isoformat(),
+            "status": "draft",
+            "subtotal": "75.00",
+            "tax": "0.00",
+            "total": "75.00",
+            "currency": "INR",
+        },
+    )
+    assert invoice.status_code == 201, invoice.text
+    posted_invoice = await client.post(
+        f"/api/v1/finance/invoices/{invoice.json()['id']}/post",
+        headers=auth,
+    )
+    assert posted_invoice.status_code == 200, posted_invoice.text
+
+    bank = await client.post(
+        "/api/v1/finance/bank-accounts",
+        headers=auth,
+        json={
+            "name": "Statement signoff bank",
+            "bank_name": "Test Bank",
+            "account_number": uuid4().hex[:12],
+            "currency": "INR",
+            "ledger_account_id": accounts["1010"],
+        },
+    )
+    assert bank.status_code == 201, bank.text
+    payment = await client.post(
+        "/api/v1/finance/payments",
+        headers={**auth, "Idempotency-Key": f"statement-pay-{uuid4().hex[:16]}"},
+        json={
+            "invoice_id": invoice.json()["id"],
+            "amount": "75.00",
+            "method": "bank",
+            "bank_account_id": bank.json()["id"],
+            "paid_on": date.today().isoformat(),
+            "reference": "STATEMENT-RECEIPT",
+        },
+    )
+    assert payment.status_code == 201, payment.text
+
+    statement = await client.post(
+        "/api/v1/finance/bank-statements",
+        headers=auth,
+        json={
+            "bank_account_id": bank.json()["id"],
+            "statement_reference": "STMT-2026-01",
+            "period_start": date.today().isoformat(),
+            "period_end": date.today().isoformat(),
+            "opening_balance": "100.00",
+            "closing_balance": "175.00",
+        },
+    )
+    assert statement.status_code == 201, statement.text
+    csv_content = (
+        "date,amount,description,reference\n"
+        f"{date.today().isoformat()},75.00,Customer receipt,STATEMENT-RECEIPT\n"
+    )
+    imported = await client.post(
+        "/api/v1/finance/bank-transactions/import",
+        headers=auth,
+        data={
+            "bank_account_id": bank.json()["id"],
+            "statement_id": statement.json()["id"],
+        },
+        files={"file": ("statement.csv", csv_content, "text/csv")},
+    )
+    assert imported.status_code == 200, imported.text
+
+    entries = await client.get(
+        "/api/v1/finance/journal-entries",
+        headers=auth,
+        params={"size": 200},
+    )
+    assert entries.status_code == 200, entries.text
+    entry = next(
+        row
+        for row in entries.json()["items"]
+        if row["id"] == payment.json()["journal_entry_id"]
+    )
+    bank_line = next(
+        line for line in entry["lines"] if line["account_id"] == accounts["1010"]
+    )
+    transactions = await client.get(
+        "/api/v1/finance/bank-transactions",
+        headers=auth,
+        params={"bank_account_id": bank.json()["id"]},
+    )
+    transaction = next(
+        row for row in transactions.json()["items"] if row["statement_id"] == statement.json()["id"]
+    )
+    unmatched_signoff = await client.post(
+        f"/api/v1/finance/bank-statements/{statement.json()['id']}/sign-off",
+        headers=auth,
+        json={"reason": "Not yet reconciled"},
+    )
+    assert unmatched_signoff.status_code == 409, unmatched_signoff.text
+
+    matched = await client.post(
+        f"/api/v1/finance/bank-transactions/{transaction['id']}/match",
+        headers=auth,
+        json={"journal_line_id": bank_line["id"]},
+    )
+    assert matched.status_code == 200, matched.text
+    reconciled = await client.post(
+        f"/api/v1/finance/bank-transactions/{transaction['id']}/reconcile",
+        headers=auth,
+    )
+    assert reconciled.status_code == 200, reconciled.text
+    summary = await client.get(
+        f"/api/v1/finance/bank-statements/{statement.json()['id']}/summary",
+        headers=auth,
+    )
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["signable"] is True, summary.text
+    assert summary.json()["difference"] == "0.00"
+
+    signed_off = await client.post(
+        f"/api/v1/finance/bank-statements/{statement.json()['id']}/sign-off",
+        headers=auth,
+        json={"reason": "Statement movement reconciled to the ledger"},
+    )
+    assert signed_off.status_code == 200, signed_off.text
+    assert signed_off.json()["status"] == "signed_off"
+    cannot_unmatch = await client.post(
+        f"/api/v1/finance/bank-transactions/{transaction['id']}/unmatch",
+        headers=auth,
+    )
+    assert cannot_unmatch.status_code == 409, cannot_unmatch.text
+
+
+async def _bank_match_setup(
+    client,
+    auth,
+    approver_auth,
+    *,
+    amount: str,
+    entry_date: date,
+    reference: str,
+):
+    accounts_response = await client.get("/api/v1/finance/accounts", headers=auth)
+    accounts = {row["code"]: row["id"] for row in accounts_response.json()["items"]}
+    bank = await client.post(
+        "/api/v1/finance/bank-accounts",
+        headers=auth,
+        json={
+            "name": f"Bank match setup {uuid4().hex[:8]}",
+            "bank_name": "Test Bank",
+            "account_number": uuid4().hex[:16],
+            "currency": "INR",
+            "ledger_account_id": accounts["1010"],
+        },
+    )
+    assert bank.status_code == 201, bank.text
+    journal = await client.post(
+        "/api/v1/finance/journal-entries",
+        headers=auth,
+        json={
+            "entry_date": entry_date.isoformat(),
+            "reference": reference,
+            "memo": "Bank match configurable rules test",
+            "lines": [
+                {"account_id": accounts["1010"], "debit": amount, "credit": "0"},
+                {"account_id": accounts["4000"], "debit": "0", "credit": amount},
+            ],
+        },
+    )
+    assert journal.status_code == 201, journal.text
+    posted = await client.post(
+        f"/api/v1/finance/journal-entries/{journal.json()['id']}/post",
+        headers=auth,
+    )
+    assert posted.status_code == 200, posted.text
+    approvals = await client.get("/api/v1/finance/approvals", headers=auth)
+    approval = next(
+        row for row in approvals.json()["items"] if row["entity_id"] == journal.json()["id"]
+    )
+    approved = await client.post(
+        f"/api/v1/finance/approvals/{approval['id']}/approve",
+        headers=approver_auth,
+        json={"reason": "Bank match test approval"},
+    )
+    assert approved.status_code == 200, approved.text
+    journals = await client.get("/api/v1/finance/journal-entries", headers=auth)
+    posted_journal = next(
+        row for row in journals.json()["items"] if row["id"] == journal.json()["id"]
+    )
+    line_id = next(
+        line["id"]
+        for line in posted_journal["lines"]
+        if line["account"]["code"] == "1010"
+    )
+    return bank.json()["id"], line_id
+
+
+async def _import_bank_row(client, auth, bank_id, *, txn_date, amount, reference):
+    csv_content = (
+        "date,amount,narration,reference\n"
+        f"{txn_date.isoformat()},{amount},Configurable rules,{reference}\n"
+    )
+    imported = await client.post(
+        "/api/v1/finance/bank-transactions/import",
+        headers=auth,
+        data={"bank_account_id": bank_id},
+        files={"file": ("rules.csv", csv_content, "text/csv")},
+    )
+    assert imported.status_code == 200, imported.text
+    transactions = await client.get(
+        "/api/v1/finance/bank-transactions",
+        headers=auth,
+        params={"bank_account_id": bank_id},
+    )
+    return transactions.json()["items"][0]
+
+
+async def _set_match_rule(client, auth, key, value):
+    response = await client.put(
+        f"/api/v1/settings/values/{key}",
+        headers=auth,
+        json={"value": value, "reason": "Configurable bank matching test"},
+    )
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.asyncio
+async def test_bank_match_date_tolerance_is_configurable(client, auth, approver_auth):
+    txn_date = date.today() - timedelta(days=20)
+    bank_id, line_id = await _bank_match_setup(
+        client,
+        auth,
+        approver_auth,
+        amount="55.00",
+        entry_date=date.today(),
+        reference="DATE-TOL-001",
+    )
+    transaction = await _import_bank_row(
+        client, auth, bank_id, txn_date=txn_date, amount="55.00", reference="DATE-TOL-001"
+    )
+    rules = await client.get("/api/v1/finance/bank-transactions/match-rules", headers=auth)
+    assert rules.status_code == 200, rules.text
+    assert rules.json()["date_tolerance_days"] == 14
+    suggestions = await client.get(
+        f"/api/v1/finance/bank-transactions/{transaction['id']}/matches", headers=auth
+    )
+    assert suggestions.status_code == 200, suggestions.text
+    assert suggestions.json() == []
+    await _set_match_rule(client, auth, "finance.bank.match.date_tolerance_days", 30)
+    try:
+        suggestions = await client.get(
+            f"/api/v1/finance/bank-transactions/{transaction['id']}/matches", headers=auth
+        )
+        assert suggestions.status_code == 200, suggestions.text
+        assert suggestions.json()[0]["journal_line_id"] == line_id
+        matched = await client.post(
+            f"/api/v1/finance/bank-transactions/{transaction['id']}/match",
+            headers=auth,
+            json={"journal_line_id": line_id},
+        )
+        assert matched.status_code == 200, matched.text
+    finally:
+        await _set_match_rule(client, auth, "finance.bank.match.date_tolerance_days", 14)
+
+
+@pytest.mark.asyncio
+async def test_bank_match_amount_mode_absolute_is_configurable(client, auth, approver_auth):
+    txn_date = date.today()
+    bank_id, line_id = await _bank_match_setup(
+        client,
+        auth,
+        approver_auth,
+        amount="60.00",
+        entry_date=txn_date,
+        reference="AMOUNT-MODE-001",
+    )
+    transaction = await _import_bank_row(
+        client, auth, bank_id, txn_date=txn_date, amount="-60.00", reference="AMOUNT-MODE-001"
+    )
+    suggestions = await client.get(
+        f"/api/v1/finance/bank-transactions/{transaction['id']}/matches", headers=auth
+    )
+    assert suggestions.json() == []
+    await _set_match_rule(client, auth, "finance.bank.match.amount_mode", "absolute")
+    try:
+        suggestions = await client.get(
+            f"/api/v1/finance/bank-transactions/{transaction['id']}/matches", headers=auth
+        )
+        assert suggestions.json()[0]["journal_line_id"] == line_id
+        matched = await client.post(
+            f"/api/v1/finance/bank-transactions/{transaction['id']}/match",
+            headers=auth,
+            json={"journal_line_id": line_id},
+        )
+        assert matched.status_code == 200, matched.text
+    finally:
+        await _set_match_rule(client, auth, "finance.bank.match.amount_mode", "signed")
+
+
+@pytest.mark.asyncio
+async def test_bank_match_reference_required_is_configurable(client, auth, approver_auth):
+    txn_date = date.today()
+    bank_id, line_id = await _bank_match_setup(
+        client,
+        auth,
+        approver_auth,
+        amount="70.00",
+        entry_date=txn_date,
+        reference="LEDGER-REF-001",
+    )
+    transaction = await _import_bank_row(
+        client, auth, bank_id, txn_date=txn_date, amount="70.00", reference="BANK-REF-001"
+    )
+    suggestions = await client.get(
+        f"/api/v1/finance/bank-transactions/{transaction['id']}/matches", headers=auth
+    )
+    assert suggestions.json()[0]["journal_line_id"] == line_id
+    await _set_match_rule(client, auth, "finance.bank.match.reference_required", True)
+    try:
+        suggestions = await client.get(
+            f"/api/v1/finance/bank-transactions/{transaction['id']}/matches", headers=auth
+        )
+        assert suggestions.json() == []
+        rejected = await client.post(
+            f"/api/v1/finance/bank-transactions/{transaction['id']}/match",
+            headers=auth,
+            json={"journal_line_id": line_id},
+        )
+        assert rejected.status_code == 422, rejected.text
+    finally:
+        await _set_match_rule(client, auth, "finance.bank.match.reference_required", False)

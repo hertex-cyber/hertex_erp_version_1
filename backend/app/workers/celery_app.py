@@ -1,6 +1,8 @@
 from celery import Celery
 
 from app.core.config import settings
+from app.tasks.settings_sweeps import BEAT_SCHEDULE
+from app.tasks.settings_sweeps import register as register_settings_sweeps
 
 celery_app = Celery(
     "hertex",
@@ -8,6 +10,8 @@ celery_app = Celery(
     backend=settings.REDIS_URL,
     include=["app.workers.tasks"],
 )
+
+register_settings_sweeps(celery_app)
 
 celery_app.conf.update(
     task_serializer="json",
@@ -19,6 +23,10 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     result_expires=60 * 60 * 24,
+    broker_connection_retry_on_startup=True,
+    beat_scheduler="celery.beat:PersistentScheduler",
+    task_default_retry_delay=5,
+    worker_send_task_events=True,
     beat_schedule={
         "refresh-analytics-cache": {
             "task": "hertex.refresh_analytics",
@@ -28,5 +36,6 @@ celery_app.conf.update(
             "task": "hertex.scan_overdue_invoices",
             "schedule": 60 * 60 * 6,
         },
+        **BEAT_SCHEDULE,
     },
 )

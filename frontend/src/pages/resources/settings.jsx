@@ -1,62 +1,10 @@
-import { KeyRound, Settings, ShieldCheck, Users } from 'lucide-react'
+import { ShieldCheck, Users } from 'lucide-react'
 import ResourcePage from '../../components/ResourcePage'
-import { Primary, Ref, Status } from '../../components/cells'
-import { dateLabel, dateTimeLabel } from '../../lib/format'
+import { Primary, Status } from '../../components/cells'
+import { dateTimeLabel } from '../../lib/format'
 
-export function SettingsValuesPage() {
-  return (
-    <ResourcePage
-      eyebrow="Workspace"
-      title="Settings"
-      description="Workspace-level configuration values, grouped by category."
-      endpoint="/settings/values"
-      permission="settings.setting"
-      createLabel="New setting"
-      searchPlaceholder="Search keys, categories…"
-      emptyIcon={Settings}
-      columns={[
-        { key: 'key', label: 'Key', render: (row) => <Primary title={row.key} subtitle={row.description || 'No description'} /> },
-        { key: 'category', label: 'Category' },
-        { key: 'value', label: 'Value', render: (row) => <code className="rounded bg-surface-2 px-2 py-1 text-[10px] text-ink-soft">{JSON.stringify(row.value ?? {}).slice(0, 70)}</code> },
-        { key: 'is_active', label: 'Status', render: (row) => <Status value={row.is_active ? 'active' : 'inactive'} /> },
-        { key: 'created_at', label: 'Updated', render: (row) => dateLabel(row.created_at) },
-      ]}
-      fields={[
-        { name: 'key', label: 'Setting key', required: true },
-        { name: 'category', label: 'Category' },
-        { name: 'value', label: 'Value (JSON)', type: 'json', default: '{}', colSpan: 2 },
-        { name: 'description', label: 'Description', type: 'textarea', colSpan: 2 },
-      ]}
-    />
-  )
-}
-
-export function SequencesPage() {
-  return (
-    <ResourcePage
-      eyebrow="Workspace"
-      title="Number sequences"
-      description="Control document prefixes and next numbers for every module."
-      endpoint="/settings/sequences"
-      permission="settings.sequence"
-      createLabel="New sequence"
-      searchPlaceholder="Search sequences…"
-      emptyIcon={KeyRound}
-      columns={[
-        { key: 'key', label: 'Sequence', render: (row) => <Primary title={row.key} subtitle={row.prefix} /> },
-        { key: 'next_number', label: 'Next number', align: 'right' },
-        { key: 'padding', label: 'Padding', align: 'right' },
-        { key: 'is_active', label: 'Status', render: (row) => <Status value={row.is_active ? 'active' : 'inactive'} /> },
-      ]}
-      fields={[
-        { name: 'key', label: 'Sequence key', required: true },
-        { name: 'prefix', label: 'Prefix', required: true },
-        { name: 'next_number', label: 'Next number', type: 'number', default: 1 },
-        { name: 'padding', label: 'Padding', type: 'number', default: 5 },
-      ]}
-    />
-  )
-}
+export { default as SettingsValuesPage } from '../settings/ValuesPage'
+export { default as SequencesPage } from '../settings/NumberingPage'
 
 export function UsersPage() {
   return (

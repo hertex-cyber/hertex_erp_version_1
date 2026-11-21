@@ -94,7 +94,15 @@ class PayrollRun(TenantBaseModel):
 
 class Payslip(TenantBaseModel):
     __tablename__ = "hr_payslips"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "payslip_number",
+            name="uq_hr_payslips_tenant_number",
+        ),
+    )
 
+    payslip_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     payroll_run_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("hr_payroll_runs.id", ondelete="CASCADE"), nullable=False, index=True
     )

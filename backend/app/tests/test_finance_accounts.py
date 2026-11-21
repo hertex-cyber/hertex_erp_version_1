@@ -138,3 +138,58 @@ async def test_posted_account_history_prevents_type_change_and_archive(
         headers=auth,
     )
     assert archive.status_code == 409, archive.text
+
+
+@pytest.mark.asyncio
+async def test_account_groups_are_tenant_scoped_typed_and_assignable(client, auth):
+    marker = uuid4().hex[:8].upper()
+    group = await client.post(
+        "/api/v1/finance/account-groups",
+        headers=auth,
+        json={
+            "code": f"ASSET-{marker}",
+            "name": f"Asset group {marker}",
+            "account_type": "asset",
+        },
+    )
+    assert group.status_code == 201, group.text
+    group_body = group.json()
+
+    account = await client.post(
+        "/api/v1/finance/accounts",
+        headers=auth,
+        json={
+            "code": f"GROUPED-{marker}",
+            "name": f"Grouped account {marker}",
+            "account_type": "asset",
+            "group_id": group_body["id"],
+        },
+    )
+    assert account.status_code == 201, account.text
+    assert account.json()["group_id"] == group_body["id"]
+
+    incompatible = await client.post(
+        "/api/v1/finance/accounts",
+        headers=auth,
+        json={
+            "code": f"BAD-GROUP-{marker}",
+            "name": "Incompatible group account",
+            "account_type": "expense",
+            "group_id": group_body["id"],
+        },
+    )
+    assert incompatible.status_code == 422, incompatible.text
+
+    archive_in_use = await client.delete(
+        f"/api/v1/finance/account-groups/{group_body['id']}",
+        headers=auth,
+    )
+    assert archive_in_use.status_code == 409, archive_in_use.text
+
+    listed = await client.get(
+        "/api/v1/finance/account-groups",
+        headers=auth,
+        params={"account_type": "asset"},
+    )
+    assert listed.status_code == 200, listed.text
+    assert any(row["id"] == group_body["id"] for row in listed.json()["items"])

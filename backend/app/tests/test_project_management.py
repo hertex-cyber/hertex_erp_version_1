@@ -62,7 +62,7 @@ async def _first_employee_id(client, auth):
 async def test_project_work_item_sprint_dependency_and_reports(client, auth):
     project = await _create_project(client, auth)
     project_id = project["id"]
-    assert project["number"].startswith("PRJ-")
+    assert project["number"].startswith("PRJ")
     assert project["status"] == "draft"
     assert project["tasks"] == []
 
@@ -81,7 +81,7 @@ async def test_project_work_item_sprint_dependency_and_reports(client, auth):
 
     work_item = await _create_work_item(client, auth, project_id, "Build API")
     work_item_id = work_item["id"]
-    assert work_item["number"].startswith("PRJ-T-")
+    assert work_item["number"].startswith("PRJ-T")
     assert work_item["board_id"]
     assert work_item["board_column_id"]
 
@@ -123,7 +123,7 @@ async def test_project_work_item_sprint_dependency_and_reports(client, auth):
     )
     assert sprint_response.status_code == 201, sprint_response.text
     sprint = sprint_response.json()
-    assert sprint["number"].startswith("SPR-")
+    assert sprint["number"].startswith("SPR")
     sprint = await _transition(
         client, auth, f"{BASE}/sprints/{sprint['id']}/transition", "start"
     )

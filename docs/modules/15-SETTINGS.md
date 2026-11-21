@@ -1,8 +1,8 @@
 # 15 — Settings (App Settings & Document Sequences)
 
 **Module owner:** Settings (platform)
-**Current state:** `AppSetting` + `NumberSequence` tables with CRUD and a `next_sequence_number` endpoint; **sequence allocation is not atomic under concurrency**
-**Date:** 2026-07-17
+**Current state:** typed Settings registry, atomic FY-aware numbering engine, gap ledger, offline blocks, encrypted secrets, typed admin UI, Celery sweeps and CI gates are implemented; local verification is green (134 backend tests, 29 frontend tests, 3 Playwright tests, Alembic replay, 100k-row gap-report p95 272.84 ms)
+**Date:** 2026-11-21
 
 ---
 
@@ -15,19 +15,21 @@ Owns tenant configuration and the **document-numbering** backbone that every num
 
 ---
 
-## 2. Current state (verified 2026-07-17)
+## 2. Current state (verified 2026-11-21)
 
 | Asset | State |
 |---|---|
-| `AppSetting` (`app_settings`) | ✅ table — `tenant_id + key` unique, `value` JSON, `category`, `description` |
-| `NumberSequence` (`number_sequences`) | ✅ table — `tenant_id + key` unique, `prefix`, `next_number`, `padding` |
-| CRUD routers | ✅ `settings.setting.*`, `settings.sequence.*` |
-| `POST /settings/sequences/next` | ✅ `router.py:55` — increments and returns `{key, next}` |
-| **Atomic allocation** | ❌ **`next_sequence_number` is not concurrency-safe** — two concurrent calls can return the same number (read `next_number`, then write `+1` with no lock) |
-| **`core/numbering.py`** | ❌ still used by every module — derives `count+1` (gaps, races, wrong after rollback) |
-| **Migration of modules to `number_sequences`** | ❌ `finance`, `sales`, `procurement`, `pos`, `hr`, `support` all call `next_number()` directly |
+| `AppSetting` (`app_settings`) | ✅ scoped, typed, versioned rows with change history and cache version bumps |
+| `NumberSequence` (`number_sequences`) | ✅ series configuration with pattern, FY, branch, lock state and channel profile fields |
+| Settings/secrets/numbering routers | ✅ typed values, approvals, masked secrets, allocation, preview, status, blocks, voids and gap reports |
+| `POST /settings/sequences/{key}/next` | ✅ deprecated with HTTP 410; callers use `document_number`/`numbering.allocate` |
+| **Atomic allocation** | ✅ `UPDATE … RETURNING` engine with allocation ledger; 30-way concurrency test green, 100-way/mixed-module acceptance still pending |
+| **`core/numbering.py`** | ✅ deleted; no module imports remain; CI lint gate wired |
+| **Migration of modules to `number_sequences`** | ✅ finance, sales, procurement, POS, projects and generic CRUD use the shared engine through `document_number`, with runtime flag rollback; commit/audit wiring is covered by tests |
+| **Sweeps and reporting** | ✅ Celery worker/beat wiring, manual sweep CLI, SQL-window gap report and CSV exports verified |
+| **Alembic replay** | ✅ blank-DB `upgrade head` + double seed replay green; two replay fixes applied |
 
-**Headline:** two sequence mechanisms coexist — the table (`NumberSequence`) and the count-derived `core/numbering.py`. The table is the right design but is **not used by any document**, and even its own `next` endpoint is racy. Every module doc in this set (01, 02, 05, 06, 08…) marks "adopt number_sequences" as a dependency; this is that dependency.
+**Headline:** the count-derived allocator is gone and modules call the shared engine. Remaining explicit gaps are 100-way/mixed-module concurrency, a Hypothesis property test for patterns, and dedicated FY/backdated/closed-period acceptance tests.
 
 ---
 
@@ -182,6 +184,8 @@ Order: **M1 → M2 (must, unblocks every numbered module) → M3**.
 - No module imports `core/numbering.py` after M2 (grep test).
 - Secret never leaks in API/audit (M3).
 
+**Verified 2026-11-21:** `backend/.venv/bin/python -m pytest -q` → 134 passed; `frontend npm test` → 29 passed; `npm run test:e2e` → 3 passed; `npm run build` green; lint/secret-leak/OpenAPI snapshot gates green; `alembic upgrade head` + double seed replay green; synthetic/live gap-report p95 162.19 ms / 272.84 ms.
+
 ---
 
 ## 16. Migration & rollout
@@ -203,9 +207,9 @@ Order: **M1 → M2 (must, unblocks every numbered module) → M3**.
 
 ## 18. Definition of Done
 
-- [ ] M1 atomic allocator + FY + pattern (concurrency test)
-- [ ] M2 all modules migrated; `core/numbering.py` removed
-- [ ] M3 secrets + rotation + audit
-- [ ] RBAC, encryption, audit
-- [ ] Playwright happy path
-- [ ] Conformance row updated
+- [x] M1 atomic allocator + FY + pattern implemented; 30-way concurrency test green (100-way/property test pending)
+- [x] M2 modules migrated and `core/numbering.py` removed; commit/audit, sweeps and POS blocks verified
+- [x] M3 secrets, masking, rotation and audit implemented; global secret-leak scan green
+- [x] RBAC, encryption and audit wired; feature-flag rollback verified via `features.numbering.engine`
+- [x] Playwright journeys and 390 px smoke green (3 tests)
+- [x] Conformance row updated

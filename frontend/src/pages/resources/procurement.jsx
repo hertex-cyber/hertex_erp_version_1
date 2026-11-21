@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { BadgeCheck, BadgeIndianRupee, ClipboardList, PackageCheck, Receipt, ShoppingCart, Truck } from 'lucide-react'
 import ResourcePage from '../../components/ResourcePage'
+import { Modal, Spinner } from '../../components/ui'
 import GSTTaxLinesModal from '../finance/GSTTaxLinesModal'
 import { api, apiErrorMessage } from '../../lib/api'
 import { Money, Primary, Ref, Status, TypeBadge } from '../../components/cells'
@@ -167,7 +168,58 @@ export function PurchaseOrdersPage() {
 export function VendorInvoicesPage() {
   const can = useAuth((state) => state.can)
   const [taxTarget, setTaxTarget] = useState(null)
+  const [allocationTarget, setAllocationTarget] = useState(null)
+  const [allocationCandidates, setAllocationCandidates] = useState([])
+  const [allocationValues, setAllocationValues] = useState({})
+  const [allocationLoading, setAllocationLoading] = useState(false)
+  const [allocationSaving, setAllocationSaving] = useState(false)
   const [reloadList, setReloadList] = useState(null)
+
+  const openAllocations = async (row, { reload }) => {
+    setAllocationTarget(row)
+    setReloadList(() => reload)
+    setAllocationLoading(true)
+    try {
+      const [candidates, allocations] = await Promise.all([
+        api.get(`/procurement/vendor-invoices/${row.id}/receipt-accrual-candidates`),
+        api.get(`/procurement/vendor-invoices/${row.id}/receipt-allocations`),
+      ])
+      setAllocationCandidates(candidates.data)
+      const saved = new Map(allocations.data.map((item) => [item.grn_accrual_id, item.allocated_amount]))
+      setAllocationValues(Object.fromEntries(candidates.data.map((item) => [
+        item.grn_accrual_id,
+        saved.get(item.grn_accrual_id) ?? (candidates.data.length === 1 ? item.remaining_amount : '0.00'),
+      ])))
+    } catch (error) {
+      toast.error('Could not load GRN allocations', apiErrorMessage(error))
+      setAllocationTarget(null)
+    } finally {
+      setAllocationLoading(false)
+    }
+  }
+
+  const saveAllocations = async (event) => {
+    event.preventDefault()
+    if (!allocationTarget) return
+    setAllocationSaving(true)
+    try {
+      await api.put(`/procurement/vendor-invoices/${allocationTarget.id}/receipt-allocations`, {
+        allocations: allocationCandidates
+          .filter((item) => Number(allocationValues[item.grn_accrual_id]) > 0)
+          .map((item) => ({
+            grn_accrual_id: item.grn_accrual_id,
+            allocated_amount: String(allocationValues[item.grn_accrual_id]),
+          })),
+      })
+      toast.success('GRN allocations saved', 'The invoice can now be approved for payment.')
+      setAllocationTarget(null)
+      reloadList?.()
+    } catch (error) {
+      toast.error('Could not save GRN allocations', apiErrorMessage(error))
+    } finally {
+      setAllocationSaving(false)
+    }
+  }
 
   const approve = async (row, { reload }) => {
     try {
@@ -210,6 +262,12 @@ export function VendorInvoicesPage() {
           },
         },
         {
+          label: 'Allocate GRNs',
+          icon: Receipt,
+          show: (row) => can('procurement.vendorinvoice.update') && row.status === 'pending' && row.purchase_order_id,
+          onClick: openAllocations,
+        },
+        {
           label: 'Approve invoice',
           icon: BadgeCheck,
           tone: 'positive',
@@ -236,6 +294,46 @@ export function VendorInvoicesPage() {
       onClose={() => setTaxTarget(null)}
       onSaved={() => reloadList?.()}
     />
+    <Modal
+      open={Boolean(allocationTarget)}
+      onClose={() => !allocationSaving && setAllocationTarget(null)}
+      title="Allocate GRN accruals"
+    >
+      <form onSubmit={saveAllocations} className="space-y-4">
+        <p className="text-sm text-muted">Split {allocationTarget?.invoice_number} across received goods accruals. The total must equal the invoice taxable amount.</p>
+        {allocationLoading ? (
+          <div className="flex min-h-24 items-center justify-center"><Spinner /></div>
+        ) : (
+          <div className="space-y-3">
+            {allocationCandidates.map((item) => (
+              <label key={item.grn_accrual_id} className="grid gap-2 rounded-xl border border-line p-3 sm:grid-cols-[1fr_9rem]">
+                <span>
+                  <span className="block text-sm font-semibold text-ink">{item.grn_number}</span>
+                  <span className="block text-xs text-muted">{dateLabel(item.received_date)} · available <Money value={item.remaining_amount} /></span>
+                </span>
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  max={item.remaining_amount}
+                  step="0.01"
+                  value={allocationValues[item.grn_accrual_id] ?? '0.00'}
+                  onChange={(event) => setAllocationValues((current) => ({ ...current, [item.grn_accrual_id]: event.target.value }))}
+                />
+              </label>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center justify-between border-t border-line pt-3 text-sm">
+          <span className="text-muted">Allocated</span>
+          <span className="font-bold text-ink"><Money value={allocationCandidates.reduce((total, item) => total + Number(allocationValues[item.grn_accrual_id] ?? 0), 0)} /></span>
+        </div>
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={() => setAllocationTarget(null)}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={allocationSaving || allocationLoading}>Save allocations</button>
+        </div>
+      </form>
+    </Modal>
     </>
   )
 }

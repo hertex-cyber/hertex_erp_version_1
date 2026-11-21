@@ -201,8 +201,8 @@ async def notify_vendor_of_approval(payload: dict[str, Any]) -> None:
     from app.modules.integrations.service import send_message
     from app.modules.procurement.models import PurchaseOrder
 
-    po_id = payload.get("po_id")
-    if not po_id:
+    po_id = _uuid(payload.get("po_id"))
+    if po_id is None:
         return
 
     async with AsyncSessionLocal() as db:

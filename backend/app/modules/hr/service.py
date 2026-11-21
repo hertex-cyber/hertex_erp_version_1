@@ -1,5 +1,6 @@
 from datetime import date
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,3 +47,25 @@ async def record_employee_exit(
     employee.is_active = False
     await db.flush()
     return employee
+
+
+async def allocate_payslip_number(
+    db: AsyncSession,
+    user: User,
+    *,
+    tenant_id: UUID,
+    payroll_run_id: UUID,
+    employee_id: UUID,
+    on_date: date,
+) -> str:
+    from app.modules.settings.numbering import document_number
+
+    return await document_number(
+        db,
+        key="payslip",
+        tenant_id=tenant_id,
+        user=user,
+        on_date=on_date,
+        document_type="payslip",
+        idempotency_key=f"payslip:{payroll_run_id}:{employee_id}",
+    )

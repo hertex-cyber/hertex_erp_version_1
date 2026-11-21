@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,6 +11,13 @@ from app.db.base import TenantBaseModel
 
 class Ticket(TenantBaseModel):
     __tablename__ = "support_tickets"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "ticket_number",
+            name="uq_support_tickets_tenant_number",
+        ),
+    )
 
     ticket_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     subject: Mapped[str] = mapped_column(String(255), nullable=False, index=True)

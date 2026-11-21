@@ -30,17 +30,32 @@ from app.modules.settings.models import AppSetting, NumberSequence
 from app.modules.support.models import Ticket
 from app.modules.warehouse.models import Bin, Warehouse
 
+# Series catalogue: (key, prefix, padding, doc_type, owner_module, pattern, reset_policy)
+# GST document channels are capped at 16 characters (CGST Rule 46(b)), so the
+# invoice pattern's worst case ``INV/25-26/99999`` is exactly 16 characters.
 SEQUENCES = [
-    ("sales_order", "SO", 5),
-    ("invoice", "INV", 5),
-    ("payment", "PAY", 5),
-    ("purchase_order", "PO", 5),
-    ("goods_receipt", "GRN", 5),
-    ("vendor_invoice", "VB", 5),
-    ("journal_entry", "JE", 5),
-    ("ticket", "TKT", 5),
-    ("project", "PRJ", 5),
-    ("payroll_run", "PR", 5),
+    ("sales_order", "SO", 4, "internal", "sales", "SO/{fy}/{seq:04}", "fiscal_year"),
+    ("invoice", "INV", 5, "gst_invoice", "finance", "INV/{fy}/{seq:05}", "fiscal_year"),
+    ("credit_note", "CN", 4, "gst_credit_note", "finance", "CN/{fy}/{seq:04}", "fiscal_year"),
+    ("payment", "PAY", 5, "internal", "finance", "PAY/{fy}/{seq:05}", "fiscal_year"),
+    ("journal_entry", "JE", 5, "journal_entry", "finance", "JE/{fy}/{seq:05}", "fiscal_year"),
+    ("purchase_requisition", "PR", 4, "internal", "procurement", "PR/{fy}/{seq:04}", "fiscal_year"),
+    ("purchase_order", "PO", 4, "internal", "procurement", "PO/{fy}/{seq:04}", "fiscal_year"),
+    ("goods_receipt", "GRN", 4, "internal", "procurement", "GRN/{fy}/{seq:04}", "fiscal_year"),
+    ("vendor_invoice", "VB", 4, "internal", "procurement", "VB/{fy}/{seq:04}", "fiscal_year"),
+    ("delivery_challan", "DC", 4, "internal", "sales", "DC/{fy}/{seq:04}", "fiscal_year"),
+    ("pos_sale", "PS", 5, "pos_sale", "pos", "PS/{fy}/{seq:05}", "fiscal_year"),
+    ("ticket", "TKT", 5, "internal", "support", "TKT/{seq:05}", "never"),
+    ("project", "PRJ", 4, "internal", "projects", "PRJ/{seq:04}", "never"),
+    ("work_item", "PRJ-T", 5, "internal", "projects", "PRJ-T/{seq:05}", "never"),
+    ("sprint", "SPR", 3, "internal", "projects", "SPR/{seq:03}", "never"),
+    ("payroll_run", "PRUN", 4, "internal", "hr", "PRUN/{fy}/{seq:04}", "fiscal_year"),
+    ("payslip", "PSL", 5, "internal", "hr", "PSL/{fy}/{seq:05}", "fiscal_year"),
+    ("e_waybill", "EWB", 5, "internal", "finance", "EWB/{fy}/{seq:05}", "fiscal_year"),
+    ("asset_impairment", "IMP", 5, "internal", "finance", "IMP/{fy}/{seq:05}", "fiscal_year"),
+    ("asset_write_off", "WO", 5, "internal", "finance", "WO/{fy}/{seq:05}", "fiscal_year"),
+    ("intercompany", "IC", 4, "internal", "finance", "IC/{fy}/{seq:04}", "fiscal_year"),
+    ("intercompany_elimination", "EL", 4, "internal", "finance", "EL/{fy}/{seq:04}", "fiscal_year"),
 ]
 
 
@@ -124,53 +139,90 @@ async def seed_tenant_and_admin(db, roles: dict[str, Role]) -> tuple[Tenant, Use
 
 
 async def seed_settings(db, tenant: Tenant) -> None:
-    defaults = [
-        (
-            "company.profile",
-            {
-                "name": tenant.name,
-                "email": settings.SEED_ADMIN_EMAIL,
-                "country": "India",
-                "currency": "INR",
-                "timezone": "Asia/Kolkata",
-            },
-            "company",
-        ),
-        (
-            "finance.defaults",
-            {"currency": "INR", "tax_rate": 18, "invoice_due_days": 15},
-            "finance",
-        ),
-        (
-            "sales.defaults",
-            {"default_channel": "direct", "quote_validity_days": 14},
-            "sales",
-        ),
-        (
-            "support.sla",
-            {"first_response_hours": 4, "resolution_hours": 48},
-            "support",
-        ),
-    ]
-    for key, value, category in defaults:
-        existing = await db.scalar(
-            select(AppSetting).where(AppSetting.tenant_id == tenant.id, AppSetting.key == key)
-        )
-        if existing is None:
-            db.add(AppSetting(tenant_id=tenant.id, key=key, value=value, category=category))
+    """Provision registry defaults + numbering series for a tenant (15A §8.6).
 
-    for key, prefix, padding in SEQUENCES:
+    Every registry key is written as an explicit tenant row so a later change to a
+    product default never silently retunes a live tenant.
+    """
+    from app.modules.settings.registry import DESCRIPTORS
+    from app.modules.settings.service import checksum
+
+    for descriptor in DESCRIPTORS:
+        if descriptor.deploy_only or descriptor.type == "secret":
+            continue
         existing = await db.scalar(
-            select(NumberSequence).where(
-                NumberSequence.tenant_id == tenant.id, NumberSequence.key == key
+            select(AppSetting).where(
+                AppSetting.tenant_id == tenant.id,
+                AppSetting.key == descriptor.key,
+                AppSetting.scope_type == "tenant",
             )
         )
         if existing is None:
             db.add(
-                NumberSequence(
-                    tenant_id=tenant.id, key=key, prefix=prefix, next_number=1, padding=padding
+                AppSetting(
+                    tenant_id=tenant.id,
+                    key=descriptor.key,
+                    value=descriptor.default,
+                    category=descriptor.module,
+                    description=descriptor.help,
+                    scope_type="tenant",
+                    value_type=descriptor.type,
+                    source="seed",
+                    version=1,
+                    checksum=checksum(descriptor.default),
                 )
             )
+
+    # Company profile derives from the tenant record on first provision.
+    profile = await db.scalar(
+        select(AppSetting).where(
+            AppSetting.tenant_id == tenant.id, AppSetting.key == "company.profile.name"
+        )
+    )
+    if profile is not None and not profile.value:
+        profile.value = tenant.name
+        profile.checksum = checksum(tenant.name)
+
+    await seed_sequences(db, tenant)
+
+
+async def provision_tenant_defaults(db, tenant: Tenant) -> None:
+    await seed_settings(db, tenant)
+
+
+async def seed_sequences(db, tenant: Tenant) -> None:
+    """Create the series catalogue and open the current period for each series."""
+    from app.modules.settings.numbering import numbering
+
+    for key, prefix, padding, doc_type, owner_module, pattern, reset_policy in SEQUENCES:
+        existing = await db.scalar(
+            select(NumberSequence).where(
+                NumberSequence.tenant_id == tenant.id,
+                NumberSequence.key == key,
+                NumberSequence.branch_id.is_(None),
+            )
+        )
+        if existing is None:
+            existing = NumberSequence(
+                tenant_id=tenant.id,
+                key=key,
+                prefix=prefix,
+                padding=padding,
+                next_number=1,
+                start_number=1,
+                doc_type=doc_type,
+                owner_module=owner_module,
+                pattern=pattern,
+                reset_policy=reset_policy,
+                implementation="standard",
+                irp_safe=doc_type.startswith("gst_"),
+                max_length=16 if doc_type.startswith("gst_") else None,
+                manual_allowed=False,
+                status="active",
+            )
+            db.add(existing)
+            await db.flush()
+        await numbering.ensure_period(db, existing, date.today())
 
 
 async def seed_demo(db, tenant: Tenant, admin: User) -> None:
@@ -430,7 +482,7 @@ async def seed_all() -> None:
         permissions = await seed_permissions(db)
         roles = await seed_roles(db, permissions)
         tenant, admin = await seed_tenant_and_admin(db, roles)
-        await seed_settings(db, tenant)
+        await provision_tenant_defaults(db, tenant)
         await seed_demo(db, tenant, admin)
         await db.commit()
 

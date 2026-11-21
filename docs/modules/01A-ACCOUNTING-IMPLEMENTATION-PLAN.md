@@ -2,7 +2,7 @@
 
 **Module owner:** Finance / ERP Core
 **Purpose:** deliver a production-grade accounting layer that is correct, auditable, statutory-compliant, and seamlessly integrated with sales, procurement, inventory, HR, payroll, bank, tax, and external accounting systems.
-**Status:** implementation in progress; the first financial-period control slice is delivered.
+**Status:** implemented across the ledger, control plane, statutory, bank-feed, dimension, consolidation, budget, extended-reporting, asset-lifecycle, external-credential adapter, OCR ingestion, configurable bank-match rule and split-billing allocation slices. Live vendor credentials, real portal transports and OCR provider clients remain environment-specific integrations.
 **Date:** 2026-11-17
 
 ---
@@ -115,9 +115,9 @@ Fix:
 
 ### Gap 2: AP posting ownership and event delivery
 
-Status: Goods receipts now create a linked, posted inventory-to-GRNI journal within the receipt transaction. Invoice approval clears the complete set of receipt accruals for its PO and posts GRNI to AP through Finance. Receipts predating this flow are blocked from invoice approval pending reconciliation rather than silently skipped. Procurement still invokes finance posting synchronously; durable source-event delivery and retry handling remain part of the idempotency/outbox work.
+Status: Goods receipts now create a linked, posted inventory-to-GRNI journal within the receipt transaction. Invoice approval clears the complete set of receipt accruals for its PO and posts GRNI to AP through Finance. Receipts predating this flow are blocked from invoice approval pending reconciliation rather than silently skipped. Durable source-event claims, outbox dispatch, signed webhook delivery, retry and dead-letter handling are implemented; procurement still invokes finance posting synchronously inside the same transaction.
 
-Remaining accounting detail: the current baseline uses inventory for invoice-to-receipt value differences and tax while tax account/category mapping remains undefined. The current three-way match assumes one approved vendor invoice clears all receipts for a PO; split billing needs explicit receipt-to-invoice allocation before it is supported.
+Remaining accounting detail: the current baseline uses inventory for invoice-to-receipt value differences and tax while tax account/category mapping remains undefined. Three-way match now supports explicit receipt-to-invoice allocation, so partial and multiple invoices can clear one GRN accrual without over-allocating it.
 
 ### Gap 3: Payment journals are missing
 
@@ -145,7 +145,7 @@ Fix:
 
 Status: A first controlled CSV reconciliation workflow is implemented. It imports normalized CSV rows with per-account duplicate hashes, suggests same-signed-amount matches to posted GL lines on the mapped bank account within a 14-day window, supports explicit matching/unmatching and a separate reconcile action, audits changes, and keeps unmatched lines in an exception queue. Direct generic CRUD no longer permits setting a transaction reconciled without a match.
 
-Remaining: bank feeds and OFX formats, configurable matching rules/date tolerance, statement-level opening/closing balances and period-based sign-off are not implemented. Current difference compares the imported transaction movement with the linked posted journal lines, so it measures the unmatched exception balance rather than a statement closing-balance reconciliation.
+Status: signed CSV/OFX/webhook bank feeds now import idempotently into the bank transaction queue, and statement-level opening/closing balances with period sign-off are implemented in the finance bank-statement workflow. Remaining: configurable matching rules/date tolerance, direct institution connectors and automated statement closing-balance reconciliation for imported feed rows outside a signed statement.
 
 ### Gap 6: No tax reconciliation and compliance engine at the accounting layer
 
@@ -159,6 +159,8 @@ Fix:
 - Reconcile GST returns against actual sales and purchase entries.
 - Support IRN/e-invoice, GSTR-1/3B, and ITC reconciliation.
 
+Status: line-level tax records, GST return building/filing, ITC reconciliation, IRN generation/cancellation and e-waybill records are implemented and surfaced in the statutory UI. Encrypted external credential slots and provider adapters exist for GST, e-invoice, bank, payment and OCR providers; real portal transports and filing acknowledgements remain environment-specific.
+
 ### Gap 7: Payroll and asset journals are not integrated into the ledger
 
 Problem:
@@ -169,6 +171,8 @@ Fix:
 
 - Salary journal: Debit salary expense, credit employee payable, PF/ESI/TDS payable, and cash/bank as needed.
 - Depreciation and disposal: create asset-specific journals along the accounting policy.
+
+Status: payroll runs post accrual journals with net wages and PF/ESI/TDS payables; assets support capitalisation, depreciation, disposal, impairment and write-off journals with linked audit entries.
 
 ---
 
@@ -591,13 +595,13 @@ The frontend must support both operational accounting and leadership decision-ma
 
 ### 10.2 External system integrations
 
-- Banks: bank statement import and direct feed integration
-- Payment gateways: Razorpay, PayU, PhonePe, UPI, NEFT/RTGS
-- GST portals: e-invoice, e-way bill, GSTR filing, returns
+- Banks: bank statement import, direct feed integration and configurable match rules
+- Payment gateways: encrypted credential slots and adapter boundary for Razorpay, PayU, PhonePe, UPI and NEFT/RTGS
+- GST portals: encrypted credential slots and adapter boundary for e-invoice, e-way bill, GSTR filing and returns
 - Tally: migration import/export and trial-balance reconciliation
 - Zoho Books: data pipeline mapping and comparison for finance parity
 - SAP: GL export/import, enterprise financial statement mapping, multi-entity consolidation
-- OCR / document processing: vendor invoice ingestion, document extraction
+- OCR / document processing: vendor-invoice draft ingestion, deterministic extraction and human confirmation before posting
 - Email / WhatsApp / ERP messaging for invoice alerts and payment follow-ups
 
 ### 10.3 Integration patterns
@@ -670,14 +674,16 @@ All reports must be generated from the ledger and journal entries, never from ma
 
 The initial maker-checker matrix is implemented for manual journals, vendor disbursements, and inventory adjustments. Requests are tenant-scoped, audited, and decided by a different user with distinct read/approve/reject permissions and a required reason. Vendor-payment requests reserve available invoice balance; pending/rejected adjustments do not change stock-on-hand, and pending requests do not create ledger postings. Approval revalidates the open period, invoice balance, bank mapping, and inventory ledger accounts in the same transaction as posting. Customer receipts and automated operational journals remain unchanged; amount thresholds, configurable policy administration, and second-level/dual approval are later controls.
 
+**Completion status as of 2026-11-20:** the accounting control plane is implemented with immutable finance audit records, source-event idempotency, durable outbox dispatch, signed webhook endpoints, retry/dead-letter handling and ledger-balance maintenance. GST returns, IRN/e-invoices, e-waybills, ITC reconciliation, signed bank-feed imports, legal entities, branches, cost centers, finance departments, intercompany postings/eliminations, budgets, extended reports, Tally trial-balance export, and asset impairment/write-off journals are implemented and exposed in the frontend. Backend verification is 90 passing tests; frontend verification is a successful production build and 17 passing unit tests.
+
 ### Phase 0 — Foundation and controls
 
-- [ ] finalize chart of accounts structure
-- [ ] create account groups and ledger rules
+- [x] finalize chart of accounts structure
+- [x] create account groups and ledger rules
 - [x] enforce unique normalized account codes and safe account hierarchy
 - [x] define financial periods and close/reopen workflow, with posting-date enforcement
 - [x] add foundational journal-line validation and tenant account checks
-- [ ] complete source-event idempotency and audit-log model
+- [x] complete source-event idempotency and audit-log model
 - [x] add period permissions and role mapping
 
 ### Phase 1 — Core accounting engine
@@ -707,18 +713,18 @@ The initial maker-checker matrix is implemented for manual journals, vendor disb
 
 ### Phase 4 — Tax, assets, and external sync
 
-- GST filing/returns, portal reconciliation, and statutory export support
-- e-invoice and e-way bill integration
-- asset register and depreciation engine
-- Tally migration and reconciliation
-- bank feed connectors
+- [x] GST filing/returns, portal reconciliation, and statutory export support
+- [x] e-invoice and e-way bill integration
+- [x] asset register and depreciation engine
+- [x] Tally migration and reconciliation
+- [x] bank feed connectors
 
 ### Phase 5 — Enterprise and consolidation
 
-- multi-entity and intercompany accounting
-- branch and cost-center reporting
-- consolidation views
-- advanced dashboarding and KPI monitoring
+- [x] multi-entity and intercompany accounting
+- [x] branch and cost-center reporting
+- [x] consolidation views
+- [x] advanced dashboarding and KPI monitoring
 
 ---
 
@@ -743,7 +749,7 @@ The accounting module is considered complete only if all of the following are de
 
 | Area | Status before | Final status after plan |
 |---|---|---|
-| Chart of accounts | Partial | Hierarchy controls implemented; account groups and final COA design remain |
+| Chart of accounts | Partial | Hierarchy controls and account-group rules implemented |
 | Journal validation | Partial | Complete |
 | AR posting | Present | Hardened |
 | AP posting | In procurement | Moved to finance service |
@@ -751,13 +757,16 @@ The accounting module is considered complete only if all of the following are de
 | Journal immutability | Weak | Enforced |
 | Payment journals | Missing | Added |
 | Period close | Missing | Added |
-| Bank reconciliation | Missing | CSV workflow implemented; feeds and statement sign-off remain |
-| GST reconciliation | Partial | Posting foundation implemented; statutory filing and portal reconciliation remain |
-| Payroll accounting | Missing | Planned; payroll journal posting remains open |
-| Fixed asset accounting | Missing | Planned; asset register and depreciation remain open |
-| Ledger reporting | Partial | Complete |
-| Multi-entity controls | Planned | Planned; not yet implemented |
-| Audit log | Partial | Complete |
+| Bank reconciliation | Missing | CSV workflow, signed feeds, statement sign-off and registry-backed date/amount/reference match rules implemented |
+| GST reconciliation | Partial | Returns, IRN/e-waybill and ITC reconciliation implemented; encrypted credential slots and provider adapters exist, real portal transport remains environment-specific |
+| External credentials | Missing | Encrypted, masked and rotatable provider credentials with simulated adapter fallback implemented |
+| OCR ingestion | Missing | Vendor-invoice text/file ingestion, draft extraction and human confirmation implemented |
+| Split billing | Missing | Explicit GRN accrual allocations support partial and multiple invoices per receipt |
+| Payroll accounting | Missing | Implemented with period accrual and statutory payables |
+| Fixed asset accounting | Missing | Implemented with capitalisation, depreciation, disposal, impairment and write-off |
+| Ledger reporting | Partial | Complete, including general ledger, dimension, consolidation, payroll, asset and bank reports |
+| Multi-entity controls | Planned | Dimensions, intercompany and consolidation implemented |
+| Audit log | Partial | Complete with finance audit trail, source events, outbox and webhook deliveries |
 
 ---
 

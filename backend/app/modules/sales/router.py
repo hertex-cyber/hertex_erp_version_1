@@ -14,7 +14,6 @@ from app.core.crud import build_crud_router
 from app.core.deps import require_permissions
 from app.core.events import publish
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
-from app.core.numbering import next_number
 from app.core.schemas import Page
 from app.db.session import get_db
 from app.modules.finance.models import Invoice, InvoiceTaxLine, TaxRegistration
@@ -38,6 +37,8 @@ from app.modules.sales.schemas import (
     SalesOrderRead,
     SalesOrderUpdate,
 )
+from app.modules.settings.numbering import commit as commit_number
+from app.modules.settings.numbering import document_number
 
 router = APIRouter(prefix="/sales")
 
@@ -72,6 +73,7 @@ _include(
     filter_fields=("order_id", "status"),
     number_field="challan_number",
     number_prefix="DC",
+    number_key="delivery_challan",
 )
 
 read_orders = require_permissions("sales.salesorder.read")
@@ -256,10 +258,18 @@ async def create_order(
         tax_total += tax
         computed_lines.append((line, line_total, tax_snapshot))
 
+    order_number = await document_number(
+        db,
+        key="sales_order",
+        prefix="SO",
+        tenant_id=user.tenant_id,
+        on_date=payload.order_date,
+        user=user,
+    )
     order = SalesOrder(
         tenant_id=user.tenant_id,
         created_by_id=user.id,
-        order_number=await next_number(db, SalesOrder, "order_number", "SO", user.tenant_id),
+        order_number=order_number,
         customer_id=payload.customer_id,
         order_date=payload.order_date,
         channel=payload.channel,
@@ -275,6 +285,9 @@ async def create_order(
     )
     db.add(order)
     await db.flush()
+    await commit_number(
+        db, order_number, document_type="SalesOrder", document_id=order.id, user=user
+    )
     for line, line_total, tax_snapshot in computed_lines:
         db.add(
             SalesOrderLine(
@@ -354,12 +367,16 @@ async def fulfill_order(
     user: User = Depends(fulfill_orders),
     db: AsyncSession = Depends(get_db),
 ):
+    from app.modules.finance.models import TaxRegistration
     from app.modules.inventory.models import Product, StockMove
     from app.modules.warehouse.models import Warehouse
 
     order = await _load_order(db, user, order_id)
     if order.status in {"fulfilled", "cancelled"}:
         raise ConflictError(f"Order is already {order.status}")
+    registration = None
+    if order.tax_registration_id is not None:
+        registration = await db.get(TaxRegistration, order.tax_registration_id)
 
     warehouse_id = order.warehouse_id
     if warehouse_id is None:
@@ -385,25 +402,42 @@ async def fulfill_order(
             )
         )
 
-    order.status = "fulfilled"
-    db.add(
-        DeliveryChallan(
-            tenant_id=user.tenant_id,
-            created_by_id=user.id,
-            challan_number=await next_number(db, DeliveryChallan, "challan_number", "DC", user.tenant_id),
-            order_id=order.id,
-            dispatched_date=date.today(),
-            warehouse_id=warehouse_id,
-        )
+    fulfilled_on = date.today()
+    challan_number = await document_number(
+        db,
+        key="delivery_challan",
+        prefix="DC",
+        tenant_id=user.tenant_id,
+        on_date=fulfilled_on,
+        user=user,
     )
+    invoice_number = await document_number(
+        db,
+        key="invoice",
+        prefix="INV",
+        tenant_id=user.tenant_id,
+        on_date=fulfilled_on,
+        gstin=registration.gstin if registration else None,
+        user=user,
+    )
+    order.status = "fulfilled"
+    challan = DeliveryChallan(
+        tenant_id=user.tenant_id,
+        created_by_id=user.id,
+        challan_number=challan_number,
+        order_id=order.id,
+        dispatched_date=fulfilled_on,
+        warehouse_id=warehouse_id,
+    )
+    db.add(challan)
 
     invoice = Invoice(
         tenant_id=user.tenant_id,
         created_by_id=user.id,
-        invoice_number=await next_number(db, Invoice, "invoice_number", "INV", user.tenant_id),
+        invoice_number=invoice_number,
         customer_id=order.customer_id,
-        issue_date=date.today(),
-        due_date=date.today() + timedelta(days=30),
+        issue_date=fulfilled_on,
+        due_date=fulfilled_on + timedelta(days=30),
         status="sent",
         subtotal=order.subtotal,
         tax=order.tax,
@@ -412,6 +446,12 @@ async def fulfill_order(
     )
     db.add(invoice)
     await db.flush()
+    await commit_number(
+        db, challan_number, document_type="DeliveryChallan", document_id=challan.id, user=user
+    )
+    await commit_number(
+        db, invoice_number, document_type="Invoice", document_id=invoice.id, user=user
+    )
     for order_line in order.lines:
         if order_line.tax_code_id is None:
             continue

@@ -43,9 +43,12 @@ from app.modules.hr.schemas import (
     PayrollRunCreate,
     PayrollRunRead,
     PayrollRunUpdate,
+    PayslipCreate,
     PayslipRead,
+    PayslipUpdate,
 )
 from app.modules.hr.service import (
+    allocate_payslip_number,
     publish_employee_exited,
     publish_employee_onboarded,
     record_employee_exit,
@@ -248,6 +251,8 @@ async def process_payroll(
     total_pf = Decimal("0")
     total_esi = Decimal("0")
     total_tds = Decimal("0")
+    year, month = (int(part) for part in run.period.split("-"))
+    payroll_date = date(year, month, monthrange(year, month)[1])
     for employee in employees:
         gross = Decimal(employee.salary or 0)
         if not gross.is_finite() or gross < 0:
@@ -259,12 +264,21 @@ async def process_payroll(
         net = gross - deductions
         if net < 0:
             raise ConflictError(f"Payroll deductions exceed gross pay for {employee.employee_code}")
+        payslip_number = await allocate_payslip_number(
+            db,
+            user,
+            tenant_id=run.tenant_id,
+            payroll_run_id=run.id,
+            employee_id=employee.id,
+            on_date=payroll_date,
+        )
         db.add(
             Payslip(
                 tenant_id=run.tenant_id,
                 created_by_id=user.id,
                 payroll_run_id=run.id,
                 employee_id=employee.id,
+                payslip_number=payslip_number,
                 gross=gross,
                 pf=pf,
                 esi=esi,
@@ -286,8 +300,6 @@ async def process_payroll(
     run.total_deductions = total_deductions
     run.total_net = total_net
     await db.flush()
-    year, month = (int(part) for part in run.period.split("-"))
-    payroll_date = date(year, month, monthrange(year, month)[1])
     journal = await post_payroll_journal(
         db,
         user,
@@ -355,3 +367,102 @@ async def list_payslips(
         "size": size,
         "pages": max(1, math.ceil(total / size)),
     }
+
+
+payslip_create_dep = require_permissions("hr.payslip.create")
+payslip_update_dep = require_permissions("hr.payslip.update")
+
+
+def _payroll_date(period: str) -> date:
+    year, month = (int(part) for part in period.split("-"))
+    return date(year, month, monthrange(year, month)[1])
+
+
+@router.post("/payslips", response_model=PayslipRead, status_code=201, tags=["HR · Payroll"])
+async def create_payslip(
+    payload: PayslipCreate,
+    user: User = Depends(payslip_create_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    run_stmt = select(PayrollRun).where(PayrollRun.id == payload.payroll_run_id)
+    employee_stmt = select(Employee).where(Employee.id == payload.employee_id)
+    if user.tenant_id and not user.is_superuser:
+        run_stmt = run_stmt.where(PayrollRun.tenant_id == user.tenant_id)
+        employee_stmt = employee_stmt.where(Employee.tenant_id == user.tenant_id)
+    run = await db.scalar(run_stmt)
+    employee = await db.scalar(employee_stmt)
+    if run is None or employee is None:
+        raise NotFoundError("Payroll run or employee not found")
+    tenant_id = run.tenant_id or user.tenant_id
+    if tenant_id is None:
+        raise ConflictError("Payslip must belong to a tenant")
+    payslip_number = await allocate_payslip_number(
+        db,
+        user,
+        tenant_id=tenant_id,
+        payroll_run_id=run.id,
+        employee_id=employee.id,
+        on_date=_payroll_date(run.period),
+    )
+    payslip = Payslip(
+        tenant_id=tenant_id,
+        created_by_id=user.id,
+        payroll_run_id=run.id,
+        employee_id=employee.id,
+        payslip_number=payslip_number,
+        gross=payload.gross,
+        pf=payload.pf,
+        esi=payload.esi,
+        tds=payload.tds,
+        other_deductions=payload.other_deductions,
+        net=payload.net,
+        notes=payload.notes,
+    )
+    db.add(payslip)
+    await db.commit()
+    await db.refresh(payslip)
+    return payslip
+
+
+@router.patch("/payslips/{payslip_id}", response_model=PayslipRead, tags=["HR · Payroll"])
+async def update_payslip(
+    payslip_id: UUID,
+    payload: PayslipUpdate,
+    request: Request,
+    user: User = Depends(payslip_update_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    payslip = await db.scalar(select(Payslip).where(Payslip.id == payslip_id))
+    if payslip is None or (not user.is_superuser and payslip.tenant_id != user.tenant_id):
+        raise NotFoundError("Payslip not found")
+    changes = payload.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        setattr(payslip, field, value)
+    if not payslip.payslip_number:
+        run = await db.scalar(
+            select(PayrollRun).where(PayrollRun.id == payslip.payroll_run_id)
+        )
+        if run is None:
+            raise ConflictError("Payslip has no payroll run for numbering")
+        payslip.payslip_number = await allocate_payslip_number(
+            db,
+            user,
+            tenant_id=payslip.tenant_id or user.tenant_id,
+            payroll_run_id=payslip.payroll_run_id,
+            employee_id=payslip.employee_id,
+            on_date=_payroll_date(run.period),
+        )
+        changes["payslip_number"] = payslip.payslip_number
+    await record_audit(
+        db,
+        user=user,
+        action="update",
+        module="hr",
+        entity="Payslip",
+        entity_id=payslip.id,
+        changes=changes,
+        request=request,
+    )
+    await db.commit()
+    await db.refresh(payslip)
+    return payslip

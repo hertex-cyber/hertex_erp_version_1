@@ -1,0 +1,220 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DATABASE_URL: postgresql+asyncpg://hertex:hertex_dev_password@localhost:5432/hertex_erp
+  REDIS_URL: redis://localhost:6379/0
+  ENVIRONMENT: test
+  AUTO_CREATE_TABLES: "false"
+  AUTO_SEED: "false"
+  SEED_DEMO_DATA: "true"
+  SEED_ADMIN_EMAIL: admin@hertex.dev
+  SEED_ADMIN_PASSWORD: Admin@12345
+  JWT_SECRET: ci-only-jwt-secret-not-for-production
+  SETTINGS_ENCRYPTION_KEY: ci-only-settings-encryption-key
+
+jobs:
+  backend:
+    name: Backend lint, tests, migrations and benchmark
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: hertex_erp
+          POSTGRES_USER: hertex
+          POSTGRES_PASSWORD: hertex_dev_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hertex -d hertex_erp"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Ruff, pyright and settings static gates
+        working-directory: backend
+        run: |
+          ruff check app scripts
+          PYTHON=python sh scripts/lint_settings.sh
+          pyright --pythonpath python \
+            app/tasks/settings_sweeps.py app/workers/celery_app.py \
+            scripts/run_settings_sweeps.py scripts/benchmark_settings_gaps.py \
+            scripts/benchmark_settings_gaps_endpoint.py
+      - name: Backend tests
+        working-directory: backend
+        run: python -m pytest -q
+      - name: Alembic upgrade and seed replay
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          python -m app.db.seed
+          python -m app.db.seed
+      - name: Celery sweep wiring
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          from app.tasks.settings_sweeps import BEAT_SCHEDULE, TASKS
+          from app.workers.celery_app import celery_app
+
+          expected = set(TASKS)
+          registered = {
+              name for name in celery_app.tasks if name.startswith("hertex.numbering.")
+          }
+          assert registered == expected, (registered, expected)
+          beat = celery_app.conf.beat_schedule
+          for entry_name, entry in BEAT_SCHEDULE.items():
+              assert entry_name in beat
+              assert beat[entry_name]["task"] == entry["task"]
+          assert celery_app.conf.beat_scheduler == "celery.beat:PersistentScheduler"
+          print("celery sweep wiring OK")
+          PY
+      - name: Synthetic gap-report benchmark gate
+        working-directory: backend
+        run: python scripts/benchmark_settings_gaps.py
+      - name: OpenAPI snapshot gate
+        working-directory: backend
+        run: python scripts/check_openapi_snapshot.py
+
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  e2e:
+    name: Playwright settings journeys and live benchmark
+    runs-on: ubuntu-latest
+    env:
+      AUTH_RATE_LIMIT_PER_MINUTE: "200"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: hertex_erp
+          POSTGRES_USER: hertex
+          POSTGRES_PASSWORD: hertex_dev_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hertex -d hertex_erp"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Migrate and seed database
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          python -m app.db.seed
+      - name: Start API
+        working-directory: backend
+        run: |
+          nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/hertex-api.log 2>&1 &
+          python - <<'PY'
+          import time
+          import urllib.request
+
+          for _ in range(60):
+              try:
+                  with urllib.request.urlopen(
+                      "http://127.0.0.1:8000/health", timeout=2
+                  ) as response:
+                      if response.status == 200:
+                          break
+              except Exception:
+                  pass
+              time.sleep(1)
+          else:
+              raise SystemExit("API did not become healthy")
+          PY
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Playwright journeys
+        working-directory: frontend
+        run: npm run test:e2e
+      - name: Live gap-report benchmark gate
+        working-directory: backend
+        run: |
+          TOKEN=$(curl -sS -X POST http://127.0.0.1:8000/api/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"admin@hertex.dev","password":"Admin@12345"}' \
+            | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          python scripts/benchmark_settings_gaps_endpoint.py --token "$TOKEN" --cleanup
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-artifacts
+          path: |
+            /tmp/hertex-api.log
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: ignore
+
+  compose:
+    name: Docker build and Compose validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+      - run: docker build -t hertex-erp-backend:ci ./backend

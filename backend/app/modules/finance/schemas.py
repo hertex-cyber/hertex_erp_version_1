@@ -13,6 +13,7 @@ class AccountBase(ORMModel):
     name: str = Field(min_length=1, max_length=200)
     account_type: str = Field(pattern="^(asset|liability|equity|income|expense)$")
     parent_id: Optional[UUID] = None
+    group_id: Optional[UUID] = None
     description: Optional[str] = None
 
     @field_validator("code")
@@ -41,6 +42,7 @@ class AccountUpdate(ORMModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     account_type: Optional[str] = None
     parent_id: Optional[UUID] = None
+    group_id: Optional[UUID] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -74,6 +76,83 @@ class AccountUpdate(ORMModel):
 
 
 class AccountRead(ORMModel):
+    id: UUID
+    code: str
+    name: str
+    account_type: str
+    parent_id: Optional[UUID] = None
+    group_id: Optional[UUID] = None
+    description: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+
+
+class AccountGroupBase(ORMModel):
+    code: str = Field(min_length=1, max_length=30)
+    name: str = Field(min_length=1, max_length=120)
+    account_type: str = Field(pattern="^(asset|liability|equity|income|expense)$")
+    parent_id: Optional[UUID] = None
+    description: Optional[str] = None
+
+    @field_validator("code")
+    @classmethod
+    def normalize_group_code(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Account group code cannot be blank")
+        return normalized
+
+    @field_validator("name")
+    @classmethod
+    def normalize_group_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Account group name cannot be blank")
+        return normalized
+
+
+class AccountGroupCreate(AccountGroupBase):
+    pass
+
+
+class AccountGroupUpdate(ORMModel):
+    code: Optional[str] = Field(default=None, min_length=1, max_length=30)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    account_type: Optional[str] = None
+    parent_id: Optional[UUID] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+    @field_validator("code")
+    @classmethod
+    def normalize_group_code(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Account group code cannot be blank")
+        return normalized
+
+    @field_validator("name")
+    @classmethod
+    def normalize_group_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Account group name cannot be blank")
+        return normalized
+
+    @field_validator("account_type")
+    @classmethod
+    def validate_group_type(cls, value: Optional[str]) -> Optional[str]:
+        allowed = {"asset", "liability", "equity", "income", "expense"}
+        if value is not None and value not in allowed:
+            raise ValueError("Unsupported account group type")
+        return value
+
+
+class AccountGroupRead(ORMModel):
     id: UUID
     code: str
     name: str
@@ -118,6 +197,9 @@ class JournalEntryRead(ORMModel):
     posted_at: Optional[datetime] = None
     reversal_of_id: Optional[UUID] = None
     reversed_by_entry_id: Optional[UUID] = None
+    source_module: Optional[str] = None
+    source_document_type: Optional[str] = None
+    source_document_id: Optional[UUID] = None
     created_at: datetime
     lines: list[JournalLineRead] = []
 
@@ -422,6 +504,35 @@ class GRNISummary(ORMModel):
     outstanding_total: Decimal
 
 
+class VendorInvoiceReceiptAllocationCreate(ORMModel):
+    grn_accrual_id: UUID
+    allocated_amount: Decimal = Field(gt=0)
+
+
+class VendorInvoiceReceiptAllocationPlan(ORMModel):
+    allocations: list[VendorInvoiceReceiptAllocationCreate] = Field(min_length=1, max_length=200)
+
+
+class VendorInvoiceReceiptAllocationRead(ORMModel):
+    id: UUID
+    vendor_invoice_id: UUID
+    grn_accrual_id: UUID
+    goods_receipt_id: UUID
+    allocated_amount: Decimal
+    journal_line_id: Optional[UUID] = None
+    created_at: datetime
+
+
+class GoodsReceiptAccrualCandidate(ORMModel):
+    grn_accrual_id: UUID
+    goods_receipt_id: UUID
+    grn_number: str
+    received_date: date
+    accrued_amount: Decimal
+    cleared_amount: Decimal
+    remaining_amount: Decimal
+
+
 class BankAccountBase(ORMModel):
     name: str
     bank_name: str
@@ -477,6 +588,7 @@ class BankTransactionUpdate(ORMModel):
 class BankTransactionRead(ORMModel):
     id: UUID
     bank_account_id: UUID
+    statement_id: Optional[UUID] = None
     txn_date: date
     amount: Decimal
     description: Optional[str] = None
@@ -507,12 +619,67 @@ class BankMatchCandidate(ORMModel):
     signed_amount: Decimal
 
 
+class BankMatchRules(ORMModel):
+    date_tolerance_days: int = Field(ge=0, le=365)
+    amount_mode: str
+    reference_required: bool
+    max_candidates: int = Field(ge=1, le=100)
+
+
 class BankTransactionMatch(ORMModel):
     journal_line_id: UUID
 
 
 class BankReconciliationUndo(ORMModel):
     reason: str = Field(min_length=3, max_length=500)
+
+
+class BankStatementCreate(ORMModel):
+    bank_account_id: UUID
+    statement_reference: str = Field(min_length=1, max_length=120)
+    period_start: date
+    period_end: date
+    opening_balance: Decimal
+    closing_balance: Decimal
+
+    @field_validator("statement_reference")
+    @classmethod
+    def normalize_statement_reference(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Statement reference cannot be blank")
+        return normalized
+
+
+class BankStatementSignoffCreate(ORMModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class BankStatementRead(ORMModel):
+    id: UUID
+    bank_account_id: UUID
+    statement_reference: str
+    period_start: date
+    period_end: date
+    opening_balance: Decimal
+    closing_balance: Decimal
+    status: str
+    signed_off_by_id: Optional[UUID] = None
+    signed_off_at: Optional[datetime] = None
+    signoff_reason: Optional[str] = None
+    created_at: datetime
+
+
+class BankStatementSummary(ORMModel):
+    statement: BankStatementRead
+    imported_count: int
+    matched_count: int
+    reconciled_count: int
+    statement_movement: Decimal
+    implied_closing_balance: Decimal
+    ledger_movement: Decimal
+    difference: Decimal
+    signable: bool
 
 
 class TrialBalanceRow(ORMModel):
@@ -574,3 +741,97 @@ class TallyImportResult(ORMModel):
     opening_balance_posted: bool
     journal_entry_id: Optional[UUID] = None
     warnings: list[str] = []
+
+
+class TallyReconciliationRow(ORMModel):
+    code: str
+    ledger_balance: Decimal
+    tally_balance: Decimal
+    difference: Decimal
+    status: str
+
+
+class TallyReconciliationResult(ORMModel):
+    ledger_debits: Decimal
+    ledger_credits: Decimal
+    tally_debits: Decimal
+    tally_credits: Decimal
+    external_trial_balance_balanced: bool
+    matched_count: int
+    mismatch_count: int
+    rows: list[TallyReconciliationRow]
+
+
+class FixedAssetCreate(ORMModel):
+    asset_tag: str = Field(min_length=1, max_length=60)
+    name: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = None
+    acquisition_date: date
+    in_service_date: date
+    cost: Decimal = Field(gt=0)
+    residual_value: Decimal = Field(default=Decimal("0"), ge=0)
+    useful_life_months: int = Field(gt=0, le=1200)
+    asset_account_id: UUID
+    accumulated_depreciation_account_id: UUID
+    depreciation_expense_account_id: UUID
+
+    @field_validator("asset_tag", "name")
+    @classmethod
+    def normalize_asset_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Asset tag and name cannot be blank")
+        return normalized
+
+
+class FixedAssetRead(ORMModel):
+    id: UUID
+    asset_tag: str
+    name: str
+    description: Optional[str] = None
+    acquisition_date: date
+    in_service_date: date
+    cost: Decimal
+    residual_value: Decimal
+    useful_life_months: int
+    accumulated_depreciation: Decimal
+    status: str
+    asset_account_id: UUID
+    accumulated_depreciation_account_id: UUID
+    depreciation_expense_account_id: UUID
+    acquisition_credit_account_id: Optional[UUID] = None
+    acquisition_journal_entry_id: Optional[UUID] = None
+    disposal_journal_entry_id: Optional[UUID] = None
+    disposed_at: Optional[date] = None
+    created_at: datetime
+
+
+class AssetCapitalizationCreate(ORMModel):
+    credit_account_id: UUID
+
+
+class AssetDepreciationRun(ORMModel):
+    period_end: date
+
+
+class AssetDepreciationRead(ORMModel):
+    id: UUID
+    asset_id: UUID
+    period_end: date
+    amount: Decimal
+    journal_entry_id: UUID
+    created_at: datetime
+
+
+class AssetDepreciationRunResult(ORMModel):
+    period_end: date
+    created_count: int
+    skipped_count: int
+    depreciations: list[AssetDepreciationRead]
+
+
+class AssetDisposalCreate(ORMModel):
+    disposed_on: date
+    proceeds: Decimal = Field(ge=0)
+    proceeds_account_id: UUID
+    gain_loss_account_id: UUID

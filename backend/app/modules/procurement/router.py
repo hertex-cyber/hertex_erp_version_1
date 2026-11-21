@@ -14,9 +14,14 @@ from app.core.crud import build_crud_router
 from app.core.deps import require_permissions
 from app.core.events import publish
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
-from app.core.numbering import next_number
 from app.core.schemas import Page
 from app.db.session import get_db
+from app.modules.finance.models import GRNAccrual, VendorInvoiceReceiptAllocation
+from app.modules.finance.schemas import (
+    GoodsReceiptAccrualCandidate,
+    VendorInvoiceReceiptAllocationPlan,
+    VendorInvoiceReceiptAllocationRead,
+)
 from app.modules.finance.service import (
     calculate_tax_snapshot,
     post_goods_receipt_accrual,
@@ -34,6 +39,7 @@ from app.modules.procurement.models import (
     VendorInvoice,
     VendorInvoiceTaxLine,
 )
+from app.modules.procurement.ocr_router import router as ocr_router
 from app.modules.procurement.schemas import (
     GoodsReceiptCreate,
     GoodsReceiptRead,
@@ -51,6 +57,8 @@ from app.modules.procurement.schemas import (
     VendorRead,
     VendorUpdate,
 )
+from app.modules.settings.numbering import commit as commit_number
+from app.modules.settings.numbering import document_number
 
 router = APIRouter(prefix="/procurement")
 
@@ -85,6 +93,7 @@ _include(
     filter_fields=("status", "department"),
     number_field="requisition_number",
     number_prefix="PR",
+    number_key="purchase_requisition",
 )
 
 _include(
@@ -170,10 +179,18 @@ async def create_purchase_order(
     db: AsyncSession = Depends(get_db),
 ):
     subtotal = sum((line.quantity * line.unit_price for line in payload.lines), Decimal("0"))
+    po_number = await document_number(
+        db,
+        key="purchase_order",
+        prefix="PO",
+        tenant_id=user.tenant_id,
+        on_date=payload.order_date,
+        user=user,
+    )
     po = PurchaseOrder(
         tenant_id=user.tenant_id,
         created_by_id=user.id,
-        po_number=await next_number(db, PurchaseOrder, "po_number", "PO", user.tenant_id),
+        po_number=po_number,
         vendor_id=payload.vendor_id,
         requisition_id=payload.requisition_id,
         order_date=payload.order_date,
@@ -186,6 +203,9 @@ async def create_purchase_order(
     )
     db.add(po)
     await db.flush()
+    await commit_number(
+        db, po_number, document_type="PurchaseOrder", document_id=po.id, user=user
+    )
     for line in payload.lines:
         db.add(
             POLine(
@@ -263,10 +283,18 @@ async def receive_purchase_order(
     if all(line.received_quantity >= line.quantity for line in po.lines):
         raise ConflictError("All purchase order quantities have already been received")
 
+    grn_number = await document_number(
+        db,
+        key="goods_receipt",
+        prefix="GRN",
+        tenant_id=user.tenant_id,
+        on_date=payload.received_date,
+        user=user,
+    )
     grn = GoodsReceipt(
         tenant_id=user.tenant_id,
         created_by_id=user.id,
-        grn_number=await next_number(db, GoodsReceipt, "grn_number", "GRN", user.tenant_id),
+        grn_number=grn_number,
         purchase_order_id=po.id,
         received_date=payload.received_date,
         received_by_id=user.id,
@@ -274,6 +302,9 @@ async def receive_purchase_order(
     )
     db.add(grn)
     await db.flush()
+    await commit_number(
+        db, grn_number, document_type="GoodsReceipt", document_id=grn.id, user=user
+    )
 
     stmt = select(Warehouse).where(Warehouse.is_active.is_(True))
     if not user.is_superuser and user.tenant_id:
@@ -330,6 +361,187 @@ async def receive_purchase_order(
     return grn
 
 
+async def _get_vendor_invoice(
+    db: AsyncSession, user: User, invoice_id: UUID, *, for_update: bool = False
+) -> VendorInvoice:
+    stmt = select(VendorInvoice).where(VendorInvoice.id == invoice_id)
+    if for_update:
+        stmt = stmt.with_for_update()
+    invoice = await db.scalar(stmt)
+    if invoice is None:
+        raise NotFoundError("Vendor invoice not found")
+    if not user.is_superuser and invoice.tenant_id != user.tenant_id:
+        raise NotFoundError("Vendor invoice not found")
+    return invoice
+
+
+@router.get(
+    "/vendor-invoices/{invoice_id}/receipt-accrual-candidates",
+    response_model=list[GoodsReceiptAccrualCandidate],
+    tags=["Procurement · Vendor Invoices"],
+)
+async def list_vendor_invoice_receipt_accrual_candidates(
+    invoice_id: UUID,
+    user: User = Depends(require_permissions("procurement.vendorinvoice.read")),
+    db: AsyncSession = Depends(get_db),
+):
+    invoice = await _get_vendor_invoice(db, user, invoice_id)
+    if invoice.purchase_order_id is None:
+        raise ConflictError("Vendor invoice must reference a purchase order for allocation")
+    rows = (
+        await db.execute(
+            select(GRNAccrual, GoodsReceipt)
+            .join(GoodsReceipt, GoodsReceipt.id == GRNAccrual.goods_receipt_id)
+            .where(
+                GRNAccrual.tenant_id == invoice.tenant_id,
+                GoodsReceipt.purchase_order_id == invoice.purchase_order_id,
+            )
+            .order_by(GoodsReceipt.received_date, GoodsReceipt.grn_number)
+        )
+    ).all()
+    return [
+        GoodsReceiptAccrualCandidate(
+            grn_accrual_id=accrual.id,
+            goods_receipt_id=receipt.id,
+            grn_number=receipt.grn_number,
+            received_date=receipt.received_date,
+            accrued_amount=accrual.accrued_amount,
+            cleared_amount=accrual.cleared_amount or Decimal("0"),
+            remaining_amount=accrual.accrued_amount
+            - (accrual.cleared_amount or Decimal("0")),
+        )
+        for accrual, receipt in rows
+    ]
+
+
+@router.get(
+    "/vendor-invoices/{invoice_id}/receipt-allocations",
+    response_model=list[VendorInvoiceReceiptAllocationRead],
+    tags=["Procurement · Vendor Invoices"],
+)
+async def list_vendor_invoice_receipt_allocations(
+    invoice_id: UUID,
+    user: User = Depends(require_permissions("procurement.vendorinvoice.read")),
+    db: AsyncSession = Depends(get_db),
+):
+    invoice = await _get_vendor_invoice(db, user, invoice_id)
+    allocations = (
+        await db.scalars(
+            select(VendorInvoiceReceiptAllocation)
+            .where(
+                VendorInvoiceReceiptAllocation.vendor_invoice_id == invoice.id,
+                VendorInvoiceReceiptAllocation.tenant_id == invoice.tenant_id,
+            )
+            .order_by(VendorInvoiceReceiptAllocation.created_at)
+        )
+    ).all()
+    return list(allocations)
+
+
+@router.put(
+    "/vendor-invoices/{invoice_id}/receipt-allocations",
+    response_model=list[VendorInvoiceReceiptAllocationRead],
+    tags=["Procurement · Vendor Invoices"],
+)
+async def replace_vendor_invoice_receipt_allocations(
+    invoice_id: UUID,
+    payload: VendorInvoiceReceiptAllocationPlan,
+    request: Request,
+    user: User = Depends(require_permissions("procurement.vendorinvoice.update")),
+    db: AsyncSession = Depends(get_db),
+):
+    invoice = await _get_vendor_invoice(db, user, invoice_id, for_update=True)
+    if invoice.status != "pending":
+        raise ConflictError("Allocations can only be changed while the invoice is pending")
+    if invoice.purchase_order_id is None:
+        raise ConflictError("Vendor invoice must reference a purchase order for allocation")
+    accrual_ids = [allocation.grn_accrual_id for allocation in payload.allocations]
+    if len(set(accrual_ids)) != len(accrual_ids):
+        raise ValidationError("An accrual can only be allocated once per invoice")
+    rows = (
+        await db.execute(
+            select(GRNAccrual, GoodsReceipt)
+            .join(GoodsReceipt, GoodsReceipt.id == GRNAccrual.goods_receipt_id)
+            .where(
+                GRNAccrual.id.in_(accrual_ids),
+                GRNAccrual.tenant_id == invoice.tenant_id,
+                GoodsReceipt.purchase_order_id == invoice.purchase_order_id,
+            )
+        )
+    ).all()
+    if len(rows) != len(accrual_ids):
+        raise ValidationError("Every allocation must reference this purchase order's GRN accruals")
+    accrual_by_id = {accrual.id: accrual for accrual, _ in rows}
+    receipt_by_id = {accrual.id: receipt for accrual, receipt in rows}
+    incoming_by_accrual: dict[UUID, Decimal] = {}
+    for item in payload.allocations:
+        incoming_by_accrual[item.grn_accrual_id] = (
+            incoming_by_accrual.get(item.grn_accrual_id, Decimal("0")) + item.allocated_amount
+        )
+    allocation_total = sum(
+        (item.allocated_amount for item in payload.allocations), Decimal("0")
+    )
+    if allocation_total != (invoice.amount or Decimal("0")):
+        raise ValidationError("Allocations must total the invoice taxable amount")
+    for accrual_id, incoming in incoming_by_accrual.items():
+        accrual = accrual_by_id[accrual_id]
+        existing = await db.scalar(
+            select(func.coalesce(func.sum(VendorInvoiceReceiptAllocation.allocated_amount), 0))
+            .join(
+                VendorInvoice,
+                VendorInvoice.id == VendorInvoiceReceiptAllocation.vendor_invoice_id,
+            )
+            .where(
+                VendorInvoiceReceiptAllocation.grn_accrual_id == accrual_id,
+                VendorInvoiceReceiptAllocation.vendor_invoice_id != invoice.id,
+                VendorInvoice.status == "pending",
+            )
+        )
+        cleared = accrual.cleared_amount or Decimal("0")
+        if cleared + Decimal(str(existing or 0)) + incoming > accrual.accrued_amount:
+            raise ConflictError("Allocation exceeds the remaining GRN accrual")
+    await db.execute(
+        delete(VendorInvoiceReceiptAllocation).where(
+            VendorInvoiceReceiptAllocation.vendor_invoice_id == invoice.id,
+            VendorInvoiceReceiptAllocation.tenant_id == invoice.tenant_id,
+        )
+    )
+    allocations = [
+        VendorInvoiceReceiptAllocation(
+            tenant_id=invoice.tenant_id,
+            created_by_id=user.id,
+            vendor_invoice_id=invoice.id,
+            grn_accrual_id=item.grn_accrual_id,
+            goods_receipt_id=receipt_by_id[item.grn_accrual_id].id,
+            allocated_amount=item.allocated_amount,
+        )
+        for item in payload.allocations
+    ]
+    db.add_all(allocations)
+    await record_audit(
+        db,
+        user=user,
+        action="configure_receipt_allocations",
+        module="procurement",
+        entity="VendorInvoice",
+        entity_id=invoice.id,
+        changes={
+            "allocations": [
+                {
+                    "grn_accrual_id": str(item.grn_accrual_id),
+                    "allocated_amount": str(item.allocated_amount),
+                }
+                for item in payload.allocations
+            ]
+        },
+        request=request,
+    )
+    await db.commit()
+    for allocation in allocations:
+        await db.refresh(allocation)
+    return allocations
+
+
 @router.post("/vendor-invoices/{invoice_id}/approve", response_model=VendorInvoiceRead, tags=["Procurement · Vendor Invoices"])
 async def approve_vendor_invoice(
     invoice_id: UUID,
@@ -357,12 +569,31 @@ async def approve_vendor_invoice(
     if total_received < total_ordered * Decimal("0.99"):
         raise ConflictError("Three-way match failed: goods not fully received against the purchase order")
 
-    invoice_total = invoice.amount
-    tolerance = po.total * Decimal("0.05")
-    if abs(invoice_total - po.total) > tolerance:
-        raise ConflictError(
-            f"Three-way match failed: invoice taxable base {invoice_total} does not match PO total {po.total}"
+    allocations = list(
+        (
+            await db.scalars(
+                select(VendorInvoiceReceiptAllocation).where(
+                    VendorInvoiceReceiptAllocation.vendor_invoice_id == invoice.id,
+                    VendorInvoiceReceiptAllocation.tenant_id == invoice.tenant_id,
+                )
+            )
+        ).all()
+    )
+    if allocations:
+        allocation_total = sum(
+            (allocation.allocated_amount for allocation in allocations), Decimal("0")
         )
+        if allocation_total != (invoice.amount or Decimal("0")):
+            raise ConflictError(
+                f"Three-way match failed: GRN allocations {allocation_total} do not match invoice taxable base {invoice.amount}"
+            )
+    else:
+        invoice_total = invoice.amount
+        tolerance = po.total * Decimal("0.05")
+        if abs(invoice_total - po.total) > tolerance:
+            raise ConflictError(
+                f"Three-way match failed: invoice taxable base {invoice_total} does not match PO total {po.total}"
+            )
 
     invoice.status = "approved"
     await post_vendor_invoice_journal(db, user, invoice)
@@ -374,7 +605,10 @@ async def approve_vendor_invoice(
         module="procurement",
         entity="VendorInvoice",
         entity_id=invoice.id,
-        changes={"invoice_number": invoice.invoice_number},
+        changes={
+            "invoice_number": invoice.invoice_number,
+            "allocation_count": len(allocations),
+        },
         request=request,
     )
     await db.commit()
@@ -452,3 +686,6 @@ async def replace_vendor_invoice_tax_lines(
     )
     await db.commit()
     return tax_lines
+
+
+router.include_router(ocr_router)

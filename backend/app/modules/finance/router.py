@@ -2,7 +2,7 @@ import csv
 import hashlib
 import io
 import math
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 from uuid import UUID
@@ -21,10 +21,13 @@ from app.core.schemas import Page
 from app.db.session import get_db
 from app.modules.finance.models import (
     Account,
+    AccountGroup,
     BankAccount,
+    BankReconciliationStatement,
     BankTransaction,
     FinanceApproval,
     FinancialPeriod,
+    FixedAsset,
     GRNAccrual,
     Invoice,
     InvoiceTaxLine,
@@ -37,16 +40,28 @@ from app.modules.finance.models import (
 )
 from app.modules.finance.schemas import (
     AccountCreate,
+    AccountGroupCreate,
+    AccountGroupRead,
+    AccountGroupUpdate,
     AccountingExceptionSummary,
     AccountRead,
     AccountUpdate,
     AgingReport,
+    AssetCapitalizationCreate,
+    AssetDepreciationRun,
+    AssetDepreciationRunResult,
+    AssetDisposalCreate,
     BankAccountCreate,
     BankAccountRead,
     BankAccountUpdate,
     BankMatchCandidate,
+    BankMatchRules,
     BankReconciliationSummary,
     BankReconciliationUndo,
+    BankStatementCreate,
+    BankStatementRead,
+    BankStatementSignoffCreate,
+    BankStatementSummary,
     BankTransactionMatch,
     BankTransactionRead,
     FinanceApprovalDecision,
@@ -54,6 +69,8 @@ from app.modules.finance.schemas import (
     FinancialPeriodCreate,
     FinancialPeriodRead,
     FinancialReport,
+    FixedAssetCreate,
+    FixedAssetRead,
     GRNISummary,
     InvoiceCreate,
     InvoiceRead,
@@ -71,6 +88,8 @@ from app.modules.finance.schemas import (
     ReceivableRow,
     ReportSection,
     TallyImportResult,
+    TallyReconciliationResult,
+    TallyReconciliationRow,
     TaxCodeCreate,
     TaxCodeRead,
     TaxCodeUpdate,
@@ -87,11 +106,15 @@ from app.modules.finance.service import (
     GST_STATE_CODES,
     accounting_exceptions,
     aging_report,
+    bank_match_date_bounds,
     calculate_tax_snapshot,
+    capitalize_fixed_asset,
     create_financial_period,
+    create_fixed_asset,
     create_journal_entry,
     create_payment,
     create_vendor_payment,
+    dispose_fixed_asset,
     get_journal_entry,
     payment_matches_request,
     post_inventory_adjustment_journal,
@@ -99,7 +122,9 @@ from app.modules.finance.service import (
     post_journal_entry,
     post_vendor_payment_journal,
     receivables,
+    resolve_bank_match_rules,
     reverse_journal_entry,
+    run_asset_depreciation,
     set_financial_period_status,
     submit_finance_approval,
     tax_line_totals,
@@ -130,6 +155,11 @@ tax_registration_update = require_permissions("finance.taxregistration.update")
 tax_code_read = require_permissions("finance.taxcode.read")
 tax_code_create = require_permissions("finance.taxcode.create")
 tax_code_update = require_permissions("finance.taxcode.update")
+asset_read = require_permissions("finance.asset.read")
+asset_create = require_permissions("finance.asset.create")
+asset_update_and_post = require_all_permissions(
+    "finance.asset.update", "finance.journal.post"
+)
 
 
 def _tenant_scope(stmt, model, user: User):
@@ -429,6 +459,233 @@ async def _get_account(db: AsyncSession, user: User, account_id: UUID) -> Accoun
     return account
 
 
+async def _get_account_group(
+    db: AsyncSession, user: User, group_id: UUID
+) -> AccountGroup:
+    stmt = select(AccountGroup).where(AccountGroup.id == group_id)
+    if not user.is_superuser and user.tenant_id:
+        stmt = stmt.where(AccountGroup.tenant_id == user.tenant_id)
+    group = await db.scalar(stmt)
+    if group is None:
+        raise NotFoundError("Account group not found")
+    return group
+
+
+async def _validate_account_group(
+    db: AsyncSession,
+    user: User,
+    data: dict,
+    *,
+    group: Optional[AccountGroup] = None,
+) -> None:
+    tenant_id = group.tenant_id if group else user.tenant_id
+    code = data.get("code", group.code if group else None)
+    group_type = data.get("account_type", group.account_type if group else None)
+    parent_id = data.get("parent_id", group.parent_id if group else None)
+
+    if code is not None:
+        duplicate = select(AccountGroup.id).where(
+            AccountGroup.tenant_id == tenant_id,
+            func.lower(AccountGroup.code) == code.lower(),
+        )
+        if group is not None:
+            duplicate = duplicate.where(AccountGroup.id != group.id)
+        if await db.scalar(duplicate.limit(1)):
+            raise ConflictError(f"Account group code '{code}' already exists in this tenant")
+
+    if group is not None and group_type != group.account_type:
+        used = await db.scalar(
+            select(Account.id)
+            .where(Account.group_id == group.id)
+            .limit(1)
+        )
+        child = await db.scalar(
+            select(AccountGroup.id).where(AccountGroup.parent_id == group.id).limit(1)
+        )
+        if used or child:
+            raise ConflictError("Account group type cannot change while it has accounts or child groups")
+
+    if group is not None and data.get("is_active") is False:
+        used = await db.scalar(
+            select(Account.id).where(
+                Account.group_id == group.id,
+                Account.is_active.is_(True),
+            ).limit(1)
+        )
+        child = await db.scalar(
+            select(AccountGroup.id).where(
+                AccountGroup.parent_id == group.id,
+                AccountGroup.is_active.is_(True),
+            ).limit(1)
+        )
+        if used or child:
+            raise ConflictError("An account group with active accounts or child groups cannot be archived")
+
+    if parent_id is None:
+        return
+    if group is not None and parent_id == group.id:
+        raise ValidationError("An account group cannot be its own parent")
+    parent = await db.scalar(
+        select(AccountGroup).where(
+            AccountGroup.id == parent_id,
+            AccountGroup.tenant_id == tenant_id,
+            AccountGroup.is_active.is_(True),
+        )
+    )
+    if parent is None:
+        raise ValidationError("Parent group must be active and belong to this tenant")
+    if parent.account_type != group_type:
+        raise ValidationError("Parent and child groups must have the same account type")
+
+    ancestor_id = parent.parent_id
+    visited = {parent.id}
+    while ancestor_id is not None:
+        if group is not None and ancestor_id == group.id:
+            raise ValidationError("Account group hierarchy cannot contain a cycle")
+        if ancestor_id in visited:
+            raise ConflictError("Existing account group hierarchy contains a cycle")
+        visited.add(ancestor_id)
+        ancestor = await db.scalar(
+            select(AccountGroup.id, AccountGroup.parent_id).where(
+                AccountGroup.id == ancestor_id,
+                AccountGroup.tenant_id == tenant_id,
+            )
+        )
+        if ancestor is None:
+            raise ValidationError("Parent account group hierarchy is invalid")
+        ancestor_id = ancestor.parent_id
+
+
+@router.get(
+    "/account-groups",
+    response_model=Page[AccountGroupRead],
+    tags=["Finance · Chart of Accounts"],
+)
+async def list_account_groups(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    q: Optional[str] = None,
+    include_inactive: bool = False,
+    account_type: Optional[str] = None,
+    user: User = Depends(account_read),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(AccountGroup)
+    count_stmt = select(func.count()).select_from(AccountGroup)
+    if not user.is_superuser and user.tenant_id:
+        stmt = stmt.where(AccountGroup.tenant_id == user.tenant_id)
+        count_stmt = count_stmt.where(AccountGroup.tenant_id == user.tenant_id)
+    if not include_inactive:
+        stmt = stmt.where(AccountGroup.is_active.is_(True))
+        count_stmt = count_stmt.where(AccountGroup.is_active.is_(True))
+    if q:
+        search_filter = or_(AccountGroup.code.ilike(f"%{q}%"), AccountGroup.name.ilike(f"%{q}%"))
+        stmt = stmt.where(search_filter)
+        count_stmt = count_stmt.where(search_filter)
+    if account_type:
+        stmt = stmt.where(AccountGroup.account_type == account_type)
+        count_stmt = count_stmt.where(AccountGroup.account_type == account_type)
+    total = int((await db.scalar(count_stmt)) or 0)
+    items = list(
+        (
+            await db.scalars(
+                stmt.order_by(AccountGroup.code).offset((page - 1) * size).limit(size)
+            )
+        ).all()
+    )
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+        "pages": max(1, math.ceil(total / size)),
+    }
+
+
+@router.post(
+    "/account-groups",
+    response_model=AccountGroupRead,
+    status_code=201,
+    tags=["Finance · Chart of Accounts"],
+)
+async def create_account_group(
+    payload: AccountGroupCreate,
+    request: Request,
+    user: User = Depends(account_create),
+    db: AsyncSession = Depends(get_db),
+):
+    if user.tenant_id is None:
+        raise ValidationError("A tenant is required to manage account groups")
+    data = payload.model_dump()
+    await _validate_account_group(db, user, data)
+    group = AccountGroup(tenant_id=user.tenant_id, created_by_id=user.id, **data)
+    db.add(group)
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError("Account group conflicts with an existing group code") from exc
+    await record_audit(
+        db, user=user, action="create", module="finance", entity="AccountGroup",
+        entity_id=group.id, changes=data, request=request,
+    )
+    await db.commit()
+    await db.refresh(group)
+    return group
+
+
+@router.patch(
+    "/account-groups/{group_id}",
+    response_model=AccountGroupRead,
+    tags=["Finance · Chart of Accounts"],
+)
+async def update_account_group(
+    group_id: UUID,
+    payload: AccountGroupUpdate,
+    request: Request,
+    user: User = Depends(account_update),
+    db: AsyncSession = Depends(get_db),
+):
+    group = await _get_account_group(db, user, group_id)
+    data = payload.model_dump(exclude_unset=True)
+    await _validate_account_group(db, user, data, group=group)
+    for field, value in data.items():
+        setattr(group, field, value)
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError("Account group conflicts with an existing group code") from exc
+    await record_audit(
+        db, user=user, action="update", module="finance", entity="AccountGroup",
+        entity_id=group.id, changes=data, request=request,
+    )
+    await db.commit()
+    await db.refresh(group)
+    return group
+
+
+@router.delete(
+    "/account-groups/{group_id}",
+    tags=["Finance · Chart of Accounts"],
+)
+async def archive_account_group(
+    group_id: UUID,
+    request: Request,
+    user: User = Depends(account_delete),
+    db: AsyncSession = Depends(get_db),
+):
+    group = await _get_account_group(db, user, group_id)
+    await _validate_account_group(db, user, {"is_active": False}, group=group)
+    group.is_active = False
+    await record_audit(
+        db, user=user, action="archive", module="finance", entity="AccountGroup",
+        entity_id=group.id, changes={"is_active": False}, request=request,
+    )
+    await db.commit()
+    return {"message": "Account group archived"}
+
+
 async def _validate_account_definition(
     db: AsyncSession,
     user: User,
@@ -440,6 +697,7 @@ async def _validate_account_definition(
     code = data.get("code", account.code if account else None)
     account_type = data.get("account_type", account.account_type if account else None)
     parent_id = data.get("parent_id", account.parent_id if account else None)
+    group_id = data.get("group_id", account.group_id if account else None)
 
     if code is not None:
         duplicate_stmt = select(Account.id).where(
@@ -489,6 +747,19 @@ async def _validate_account_definition(
         )
         if active_children:
             raise ConflictError("An account with active child accounts cannot be deactivated")
+
+    if group_id is not None:
+        group = await db.scalar(
+            select(AccountGroup).where(
+                AccountGroup.id == group_id,
+                AccountGroup.tenant_id == tenant_id,
+                AccountGroup.is_active.is_(True),
+            )
+        )
+        if group is None:
+            raise ValidationError("Account group must be active and belong to this tenant")
+        if group.account_type != account_type:
+            raise ValidationError("Account and account group must have the same account type")
 
     if parent_id is None:
         return
@@ -693,6 +964,7 @@ _include(
     filter_fields=("status", "customer_id"),
     number_field="invoice_number",
     number_prefix="INV",
+    number_key="invoice",
 )
 
 _include(
@@ -934,6 +1206,308 @@ async def _get_bank_account(
     return bank_account
 
 
+async def _get_bank_statement(
+    db: AsyncSession, user: User, statement_id: UUID
+) -> BankReconciliationStatement:
+    stmt = select(BankReconciliationStatement).where(
+        BankReconciliationStatement.id == statement_id
+    )
+    if not user.is_superuser:
+        stmt = stmt.where(
+            BankReconciliationStatement.tenant_id == user.tenant_id
+        )
+    statement = await db.scalar(stmt)
+    if statement is None:
+        raise NotFoundError("Bank statement not found")
+    return statement
+
+
+async def _ensure_statement_open(
+    db: AsyncSession, transaction: BankTransaction
+) -> None:
+    if transaction.statement_id is None:
+        return
+    statement = await db.get(
+        BankReconciliationStatement, transaction.statement_id
+    )
+    if statement is not None and statement.status == "signed_off":
+        raise ConflictError("Signed-off bank statements cannot be changed")
+
+
+async def _bank_statement_summary(
+    db: AsyncSession,
+    user: User,
+    statement: BankReconciliationStatement,
+) -> dict:
+    bank_account = await _get_bank_account(db, user, statement.bank_account_id)
+    if bank_account.ledger_account_id is None:
+        raise ValidationError("Map the bank account to a GL account before sign-off")
+    await _require_bank_asset_account(db, bank_account)
+
+    transactions = list(
+        (
+            await db.scalars(
+                select(BankTransaction).where(
+                    BankTransaction.tenant_id == statement.tenant_id,
+                    BankTransaction.statement_id == statement.id,
+                    BankTransaction.is_active.is_(True),
+                )
+            )
+        ).all()
+    )
+    imported_count = len(transactions)
+    matched_count = sum(
+        1 for transaction in transactions if transaction.matched_journal_line_id
+    )
+    reconciled_count = sum(1 for transaction in transactions if transaction.reconciled)
+    statement_movement = sum(
+        (transaction.amount for transaction in transactions), Decimal("0")
+    )
+    ledger_movement = Decimal(
+        str(
+            await db.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(JournalLine.debit - JournalLine.credit), 0
+                    )
+                )
+                .join(
+                    JournalEntry,
+                    JournalEntry.id == JournalLine.journal_entry_id,
+                )
+                .join(
+                    BankTransaction,
+                    BankTransaction.matched_journal_line_id == JournalLine.id,
+                )
+                .where(
+                    JournalLine.tenant_id == statement.tenant_id,
+                    JournalLine.account_id == bank_account.ledger_account_id,
+                    BankTransaction.statement_id == statement.id,
+                    BankTransaction.is_active.is_(True),
+                    JournalEntry.status == "posted",
+                    JournalEntry.entry_date.between(statement.period_start, statement.period_end),
+                )
+            )
+            or 0
+        )
+    )
+    implied_closing = statement.opening_balance + ledger_movement
+    difference = statement.closing_balance - implied_closing
+    statement_movement_matches = (
+        statement.opening_balance + statement_movement
+        == statement.closing_balance
+    )
+    signable = (
+        imported_count == matched_count == reconciled_count
+        and statement_movement_matches
+        and statement_movement == ledger_movement
+        and difference == 0
+    )
+    return {
+        "statement": statement,
+        "imported_count": imported_count,
+        "matched_count": matched_count,
+        "reconciled_count": reconciled_count,
+        "statement_movement": statement_movement,
+        "implied_closing_balance": implied_closing,
+        "ledger_movement": ledger_movement,
+        "difference": difference,
+        "signable": signable,
+    }
+
+
+@router.get(
+    "/bank-statements",
+    response_model=Page[BankStatementRead],
+    tags=["Finance · Banking"],
+)
+async def list_bank_statements(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    bank_account_id: Optional[UUID] = None,
+    user: User = Depends(read_bank_transactions),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(BankReconciliationStatement)
+    count_stmt = select(func.count()).select_from(BankReconciliationStatement)
+    if not user.is_superuser:
+        stmt = stmt.where(BankReconciliationStatement.tenant_id == user.tenant_id)
+        count_stmt = count_stmt.where(
+            BankReconciliationStatement.tenant_id == user.tenant_id
+        )
+    if bank_account_id:
+        stmt = stmt.where(
+            BankReconciliationStatement.bank_account_id == bank_account_id
+        )
+        count_stmt = count_stmt.where(
+            BankReconciliationStatement.bank_account_id == bank_account_id
+        )
+    total = int((await db.scalar(count_stmt)) or 0)
+    items = list(
+        (
+            await db.scalars(
+                stmt.order_by(
+                    BankReconciliationStatement.period_end.desc(),
+                    BankReconciliationStatement.statement_reference,
+                )
+                .offset((page - 1) * size)
+                .limit(size)
+            )
+        ).all()
+    )
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+        "pages": max(1, math.ceil(total / size)),
+    }
+
+
+@router.post(
+    "/bank-statements",
+    response_model=BankStatementRead,
+    status_code=201,
+    tags=["Finance · Banking"],
+)
+async def create_bank_statement(
+    payload: BankStatementCreate,
+    request: Request,
+    user: User = Depends(create_bank_transactions),
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.period_start > payload.period_end:
+        raise ValidationError("Statement start date cannot be after its end date")
+    for label, amount in (
+        ("opening", payload.opening_balance),
+        ("closing", payload.closing_balance),
+    ):
+        if (
+            not amount.is_finite()
+            or abs(amount) >= Decimal("1000000000000")
+            or amount != amount.quantize(Decimal("0.01"))
+        ):
+            raise ValidationError(
+                f"Statement {label} balance must have supported two-decimal precision"
+            )
+    bank_account = await _get_bank_account(db, user, payload.bank_account_id)
+    if not bank_account.is_active:
+        raise ValidationError("Select an active bank account")
+    overlap = await db.scalar(
+        select(BankReconciliationStatement.id).where(
+            BankReconciliationStatement.tenant_id == bank_account.tenant_id,
+            BankReconciliationStatement.bank_account_id == bank_account.id,
+            BankReconciliationStatement.period_start <= payload.period_end,
+            BankReconciliationStatement.period_end >= payload.period_start,
+        ).limit(1)
+    )
+    if overlap:
+        raise ConflictError("A statement already covers part of this bank account date range")
+    statement = BankReconciliationStatement(
+        tenant_id=bank_account.tenant_id,
+        created_by_id=user.id,
+        bank_account_id=bank_account.id,
+        statement_reference=payload.statement_reference,
+        period_start=payload.period_start,
+        period_end=payload.period_end,
+        opening_balance=payload.opening_balance,
+        closing_balance=payload.closing_balance,
+        status="open",
+    )
+    db.add(statement)
+    await db.flush()
+    await db.execute(
+        update(BankTransaction)
+        .where(
+            BankTransaction.tenant_id == bank_account.tenant_id,
+            BankTransaction.bank_account_id == bank_account.id,
+            BankTransaction.statement_id.is_(None),
+            BankTransaction.txn_date.between(
+                payload.period_start, payload.period_end
+            ),
+        )
+        .values(statement_id=statement.id)
+    )
+    await record_audit(
+        db,
+        user=user,
+        action="create",
+        module="finance",
+        entity="BankStatement",
+        entity_id=statement.id,
+        changes=payload.model_dump(mode="json"),
+        request=request,
+    )
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError(
+            "Statement reference or date range conflicts with an existing statement"
+        ) from exc
+    await db.refresh(statement)
+    return statement
+
+
+@router.get(
+    "/bank-statements/{statement_id}/summary",
+    response_model=BankStatementSummary,
+    tags=["Finance · Banking"],
+)
+async def get_bank_statement_summary(
+    statement_id: UUID,
+    user: User = Depends(read_bank_transactions),
+    db: AsyncSession = Depends(get_db),
+):
+    statement = await _get_bank_statement(db, user, statement_id)
+    return await _bank_statement_summary(db, user, statement)
+
+
+@router.post(
+    "/bank-statements/{statement_id}/sign-off",
+    response_model=BankStatementRead,
+    tags=["Finance · Banking"],
+)
+async def sign_off_bank_statement(
+    statement_id: UUID,
+    payload: BankStatementSignoffCreate,
+    request: Request,
+    user: User = Depends(update_bank_transactions),
+    db: AsyncSession = Depends(get_db),
+):
+    statement = await _get_bank_statement(db, user, statement_id)
+    if statement.status == "signed_off":
+        raise ConflictError("Bank statement is already signed off")
+    summary = await _bank_statement_summary(db, user, statement)
+    if not summary["signable"]:
+        raise ConflictError(
+            "Statement cannot be signed off until all lines are reconciled and "
+            "statement movement, ledger movement, and closing balance agree"
+        )
+    statement.status = "signed_off"
+    statement.signed_off_by_id = user.id
+    statement.signed_off_at = datetime.now(timezone.utc)
+    statement.signoff_reason = payload.reason.strip()
+    await record_audit(
+        db,
+        user=user,
+        action="signoff",
+        module="finance",
+        entity="BankStatement",
+        entity_id=statement.id,
+        changes={
+            "reason": payload.reason.strip(),
+            "difference": str(summary["difference"]),
+            "statement_movement": str(summary["statement_movement"]),
+            "ledger_movement": str(summary["ledger_movement"]),
+        },
+        request=request,
+    )
+    await db.commit()
+    await db.refresh(statement)
+    return statement
+
+
 def _transaction_hash(
     bank_account_id: UUID,
     txn_date: date,
@@ -1031,6 +1605,7 @@ async def list_bank_transactions(
 async def import_bank_statement(
     request: Request,
     bank_account_id: UUID = Form(),
+    statement_id: Optional[UUID] = Form(None),
     file: UploadFile = File(),
     user: User = Depends(create_bank_transactions),
     db: AsyncSession = Depends(get_db),
@@ -1038,6 +1613,13 @@ async def import_bank_statement(
     bank_account = await _get_bank_account(db, user, bank_account_id)
     if not bank_account.is_active:
         raise ValidationError("Select an active bank account")
+    statement = None
+    if statement_id is not None:
+        statement = await _get_bank_statement(db, user, statement_id)
+        if statement.bank_account_id != bank_account.id:
+            raise ValidationError("Statement must belong to the selected bank account")
+        if statement.status != "open":
+            raise ConflictError("Transactions cannot be imported into a signed-off statement")
     raw = await file.read(10 * 1024 * 1024 + 1)
     if len(raw) > 10 * 1024 * 1024:
         raise ValidationError("Bank statement file cannot exceed 10 MB")
@@ -1094,6 +1676,12 @@ async def import_bank_statement(
             raise ValidationError(f"Invalid transaction amount on CSV row {row_number}")
         if amount != amount.quantize(Decimal("0.01")):
             raise ValidationError(f"Transaction amount has excess precision on row {row_number}")
+        if statement is not None and not (
+            statement.period_start <= txn_date <= statement.period_end
+        ):
+            raise ValidationError(
+                f"Transaction date is outside the selected statement on CSV row {row_number}"
+            )
         description = (
             (row.get(description_column) or "").strip()[:255]
             if description_column
@@ -1164,6 +1752,7 @@ async def import_bank_statement(
             tenant_id=bank_account.tenant_id,
             created_by_id=user.id,
             bank_account_id=bank_account.id,
+            statement_id=statement.id if statement is not None else None,
             **item,
         )
         for item in parsed
@@ -1205,6 +1794,18 @@ async def import_bank_statement(
 
 
 @router.get(
+    "/bank-transactions/match-rules",
+    response_model=BankMatchRules,
+    tags=["Finance · Banking"],
+)
+async def get_bank_match_rules(
+    user: User = Depends(read_bank_transactions),
+    db: AsyncSession = Depends(get_db),
+):
+    return await resolve_bank_match_rules(db, user)
+
+
+@router.get(
     "/bank-transactions/{transaction_id}/matches",
     response_model=list[BankMatchCandidate],
     tags=["Finance · Banking"],
@@ -1222,6 +1823,7 @@ async def suggest_bank_matches(
     transaction = await db.scalar(transaction_stmt)
     if transaction is None:
         raise NotFoundError("Bank transaction not found")
+    await _ensure_statement_open(db, transaction)
     if transaction.reconciled:
         raise ConflictError("Reconciled bank transactions cannot be rematched")
     if transaction.matched_journal_line_id is not None:
@@ -1230,30 +1832,41 @@ async def suggest_bank_matches(
     if bank_account.ledger_account_id is None:
         raise ValidationError("Map the bank account to a GL account before matching")
     await _require_bank_asset_account(db, bank_account)
-    lower_date = transaction.txn_date - timedelta(days=14)
-    upper_date = transaction.txn_date + timedelta(days=14)
+    rules = await resolve_bank_match_rules(db, user)
+    lower_date, upper_date = bank_match_date_bounds(transaction.txn_date, rules)
     matched_lines = select(BankTransaction.matched_journal_line_id).where(
         BankTransaction.tenant_id == bank_account.tenant_id,
         BankTransaction.matched_journal_line_id.is_not(None),
         BankTransaction.id != transaction.id,
     )
+    conditions = [
+        JournalLine.account_id == bank_account.ledger_account_id,
+        JournalLine.tenant_id == bank_account.tenant_id,
+        JournalEntry.status == "posted",
+        JournalEntry.entry_date >= lower_date,
+        JournalEntry.entry_date <= upper_date,
+        JournalLine.id.not_in(matched_lines),
+    ]
+    if rules.amount_mode == "absolute":
+        conditions.append(
+            func.abs(JournalLine.debit - JournalLine.credit) == abs(transaction.amount)
+        )
+    else:
+        conditions.append(JournalLine.debit - JournalLine.credit == transaction.amount)
+    if rules.reference_required:
+        conditions.append(
+            func.lower(func.coalesce(JournalEntry.reference, ""))
+            == (transaction.reference or "").casefold()
+        )
     stmt = (
         select(JournalLine, JournalEntry)
         .join(JournalEntry, JournalEntry.id == JournalLine.journal_entry_id)
-        .where(
-            JournalLine.account_id == bank_account.ledger_account_id,
-            JournalLine.tenant_id == bank_account.tenant_id,
-            JournalEntry.status == "posted",
-            JournalEntry.entry_date >= lower_date,
-            JournalEntry.entry_date <= upper_date,
-            JournalLine.debit - JournalLine.credit == transaction.amount,
-            JournalLine.id.not_in(matched_lines),
-        )
+        .where(*conditions)
         .order_by(
             func.abs(JournalEntry.entry_date - transaction.txn_date),
             JournalEntry.entry_date.desc(),
         )
-        .limit(20)
+        .limit(rules.max_candidates)
     )
     rows = (await db.execute(stmt)).all()
     return [
@@ -1289,31 +1902,46 @@ async def match_bank_transaction(
     transaction = await db.scalar(stmt)
     if transaction is None:
         raise NotFoundError("Bank transaction not found")
+    await _ensure_statement_open(db, transaction)
     if transaction.reconciled:
         raise ConflictError("Reconciled bank transactions cannot be rematched")
     bank_account = await _get_bank_account(db, user, transaction.bank_account_id)
     if bank_account.ledger_account_id is None:
         raise ValidationError("Map the bank account to a GL account before matching")
     await _require_bank_asset_account(db, bank_account)
+    rules = await resolve_bank_match_rules(db, user)
+    lower_date, upper_date = bank_match_date_bounds(transaction.txn_date, rules)
+    conditions = [
+        JournalLine.id == payload.journal_line_id,
+        JournalLine.account_id == bank_account.ledger_account_id,
+        JournalLine.tenant_id == bank_account.tenant_id,
+        JournalEntry.status == "posted",
+        JournalEntry.entry_date.between(lower_date, upper_date),
+    ]
+    if rules.amount_mode == "absolute":
+        conditions.append(
+            func.abs(JournalLine.debit - JournalLine.credit) == abs(transaction.amount)
+        )
+    else:
+        conditions.append(JournalLine.debit - JournalLine.credit == transaction.amount)
+    if rules.reference_required:
+        conditions.append(
+            func.lower(func.coalesce(JournalEntry.reference, ""))
+            == (transaction.reference or "").casefold()
+        )
     line = await db.scalar(
         select(JournalLine)
         .join(JournalEntry, JournalEntry.id == JournalLine.journal_entry_id)
-        .where(
-            JournalLine.id == payload.journal_line_id,
-            JournalLine.account_id == bank_account.ledger_account_id,
-            JournalLine.tenant_id == bank_account.tenant_id,
-            JournalEntry.status == "posted",
-            JournalEntry.entry_date.between(
-                transaction.txn_date - timedelta(days=14),
-                transaction.txn_date + timedelta(days=14),
-            ),
-            JournalLine.debit - JournalLine.credit == transaction.amount,
-        )
+        .where(*conditions)
         .with_for_update()
     )
     if line is None:
+        amount_label = "absolute amount" if rules.amount_mode == "absolute" else "signed amount"
+        reference_label = " and matching reference" if rules.reference_required else ""
         raise ValidationError(
-            "Select a posted journal line for this bank account with the same signed amount and a date within 14 days"
+            "Select a posted journal line for this bank account with the same "
+            f"{amount_label}{reference_label} and a date within "
+            f"{rules.date_tolerance_days} days"
         )
     already_matched = await db.scalar(
         select(BankTransaction.id).where(
@@ -1331,7 +1959,7 @@ async def match_bank_transaction(
         module="finance",
         entity="BankTransaction",
         entity_id=transaction.id,
-        changes={"journal_line_id": str(line.id)},
+        changes={"journal_line_id": str(line.id), "rules": rules.model_dump()},
         request=request,
     )
     await db.commit()
@@ -1356,6 +1984,7 @@ async def reconcile_bank_transaction(
     transaction = await db.scalar(stmt)
     if transaction is None:
         raise NotFoundError("Bank transaction not found")
+    await _ensure_statement_open(db, transaction)
     if transaction.matched_journal_line_id is None:
         raise ConflictError("Match this bank transaction to a posted journal line before reconciling")
     if not transaction.reconciled:
@@ -1409,6 +2038,7 @@ async def unreconcile_bank_transaction(
     transaction = await db.scalar(stmt)
     if transaction is None:
         raise NotFoundError("Bank transaction not found")
+    await _ensure_statement_open(db, transaction)
     if not transaction.reconciled:
         raise ConflictError("Bank transaction is not reconciled")
     transaction.reconciled = False
@@ -1447,6 +2077,7 @@ async def unmatch_bank_transaction(
     transaction = await db.scalar(stmt)
     if transaction is None:
         raise NotFoundError("Bank transaction not found")
+    await _ensure_statement_open(db, transaction)
     if transaction.reconciled:
         raise ConflictError("Reconciled transactions cannot be unmatched; reverse the reconciliation first")
     matched_line_id = transaction.matched_journal_line_id
@@ -2073,7 +2704,7 @@ async def _period_close_checklist(db: AsyncSession, user: User, period: Financia
             GRNAccrual.tenant_id == period.tenant_id,
             GoodsReceipt.received_date >= period.start_date,
             GoodsReceipt.received_date <= period.end_date,
-            GRNAccrual.cleared_by_invoice_id.is_(None),
+            GRNAccrual.accrued_amount - func.coalesce(GRNAccrual.cleared_amount, 0) > 0,
         )
     ) or 0)
 
@@ -2269,10 +2900,18 @@ async def list_journal_entries(
 async def new_journal_entry(
     payload: JournalEntryCreate,
     request: Request,
+    idempotency_key: Optional[str] = Header(
+        default=None,
+        alias="Idempotency-Key",
+        min_length=8,
+        max_length=128,
+    ),
     user: User = Depends(create_journals),
     db: AsyncSession = Depends(get_db),
 ):
-    entry = await create_journal_entry(db, user, payload)
+    entry = await create_journal_entry(
+        db, user, payload, idempotency_key=idempotency_key
+    )
     await record_audit(
         db,
         user=user,
@@ -2553,10 +3192,13 @@ async def report_grni(
 ):
     stmt = select(
         func.count(GRNAccrual.id),
-        func.coalesce(func.sum(GRNAccrual.accrued_amount), 0),
+        func.coalesce(
+            func.sum(GRNAccrual.accrued_amount - func.coalesce(GRNAccrual.cleared_amount, 0)),
+            0,
+        ),
     ).where(
         GRNAccrual.is_active.is_(True),
-        GRNAccrual.cleared_by_invoice_id.is_(None),
+        GRNAccrual.accrued_amount - func.coalesce(GRNAccrual.cleared_amount, 0) > 0,
     )
     if not user.is_superuser and user.tenant_id:
         stmt = stmt.where(GRNAccrual.tenant_id == user.tenant_id)
@@ -2674,3 +3316,332 @@ async def import_tally_file(
     )
     await db.commit()
     return result
+
+
+@router.post(
+    "/tally/reconcile",
+    response_model=TallyReconciliationResult,
+    tags=["Finance · Tally Import"],
+)
+async def reconcile_tally_trial_balance(
+    request: Request,
+    file: UploadFile = File(...),
+    user: User = Depends(read_reports),
+    db: AsyncSession = Depends(get_db),
+):
+    content = await file.read(10 * 1024 * 1024 + 1)
+    if len(content) > 10 * 1024 * 1024:
+        raise ValidationError("Tally trial balance file is larger than 10 MB")
+    try:
+        text_content = content.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValidationError("Tally trial balance CSV must be UTF-8 encoded") from exc
+    reader = csv.DictReader(io.StringIO(text_content))
+    if not reader.fieldnames:
+        raise ValidationError("Tally trial balance CSV must include a header row")
+    columns = {name.strip().lower(): name for name in reader.fieldnames if name}
+    code_column = next(
+        (columns[key] for key in ("code", "account_code", "ledger_code") if key in columns),
+        None,
+    )
+    debit_column = columns.get("debit")
+    credit_column = columns.get("credit")
+    if code_column is None or debit_column is None or credit_column is None:
+        raise ValidationError("CSV requires code, debit, and credit columns")
+    external: dict[str, tuple[Decimal, Decimal]] = {}
+    tally_debits = Decimal("0")
+    tally_credits = Decimal("0")
+    for row_number, row in enumerate(reader, start=2):
+        raw_code = (row.get(code_column) or "").strip().upper()
+        if not raw_code:
+            raise ValidationError(f"Account code is required on CSV row {row_number}")
+        if raw_code in external:
+            raise ValidationError(f"Duplicate account code '{raw_code}' on CSV row {row_number}")
+        try:
+            debit = Decimal((row.get(debit_column) or "0").replace(",", "").strip())
+            credit = Decimal((row.get(credit_column) or "0").replace(",", "").strip())
+        except (InvalidOperation, ValueError) as exc:
+            raise ValidationError(f"Invalid debit or credit on CSV row {row_number}") from exc
+        if (
+            not debit.is_finite()
+            or not credit.is_finite()
+            or debit < 0
+            or credit < 0
+            or debit >= Decimal("1000000000000")
+            or credit >= Decimal("1000000000000")
+            or debit != debit.quantize(Decimal("0.01"))
+            or credit != credit.quantize(Decimal("0.01"))
+        ):
+            raise ValidationError(f"Invalid amount precision or range on CSV row {row_number}")
+        if debit > 0 and credit > 0:
+            raise ValidationError(f"Account cannot have both debit and credit on row {row_number}")
+        external[raw_code] = (debit, credit)
+        tally_debits += debit
+        tally_credits += credit
+
+    if not external:
+        raise ValidationError("Tally trial balance CSV contains no account rows")
+    ledger_rows = await trial_balance(db, user)
+    ledger = {row.code.upper(): row for row in ledger_rows}
+    result_rows = []
+    matched_count = 0
+    mismatch_count = 0
+    for code in sorted(set(ledger) | set(external)):
+        ledger_balance = (
+            ledger[code].balance if code in ledger else Decimal("0")
+        )
+        debit, credit = external.get(code, (Decimal("0"), Decimal("0")))
+        tally_balance = debit - credit
+        difference = ledger_balance - tally_balance
+        if difference == 0:
+            status = "matched" if code in ledger else "unmapped_zero"
+            matched_count += code in ledger
+        else:
+            status = "unmapped" if code not in ledger else "mismatch"
+            mismatch_count += 1
+        result_rows.append(
+            TallyReconciliationRow(
+                code=code,
+                ledger_balance=ledger_balance,
+                tally_balance=tally_balance,
+                difference=difference,
+                status=status,
+            )
+        )
+    result = TallyReconciliationResult(
+        ledger_debits=sum((row.debit for row in ledger_rows), Decimal("0")),
+        ledger_credits=sum((row.credit for row in ledger_rows), Decimal("0")),
+        tally_debits=tally_debits,
+        tally_credits=tally_credits,
+        external_trial_balance_balanced=tally_debits == tally_credits,
+        matched_count=matched_count,
+        mismatch_count=mismatch_count,
+        rows=result_rows,
+    )
+    await record_audit(
+        db,
+        user=user,
+        action="reconcile",
+        module="finance",
+        entity="TallyTrialBalance",
+        changes={
+            "accounts": len(external),
+            "matched": matched_count,
+            "mismatches": mismatch_count,
+            "tally_debits": str(tally_debits),
+            "tally_credits": str(tally_credits),
+        },
+        request=request,
+    )
+    await db.commit()
+    return result
+
+
+@router.get(
+    "/assets",
+    response_model=Page[FixedAssetRead],
+    tags=["Finance · Fixed Assets"],
+)
+async def list_fixed_assets(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    q: Optional[str] = None,
+    status: Optional[str] = Query(default=None, pattern="^(draft|active|disposed)$"),
+    user: User = Depends(asset_read),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(FixedAsset)
+    count_stmt = select(func.count()).select_from(FixedAsset)
+    if not user.is_superuser:
+        stmt = stmt.where(FixedAsset.tenant_id == user.tenant_id)
+        count_stmt = count_stmt.where(FixedAsset.tenant_id == user.tenant_id)
+    if q:
+        search_filter = or_(
+            FixedAsset.asset_tag.ilike(f"%{q}%"),
+            FixedAsset.name.ilike(f"%{q}%"),
+        )
+        stmt = stmt.where(search_filter)
+        count_stmt = count_stmt.where(search_filter)
+    if status:
+        stmt = stmt.where(FixedAsset.status == status)
+        count_stmt = count_stmt.where(FixedAsset.status == status)
+    total = int((await db.scalar(count_stmt)) or 0)
+    items = list(
+        (
+            await db.scalars(
+                stmt.order_by(FixedAsset.asset_tag)
+                .offset((page - 1) * size)
+                .limit(size)
+            )
+        ).all()
+    )
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+        "pages": max(1, math.ceil(total / size)),
+    }
+
+
+@router.post(
+    "/assets",
+    response_model=FixedAssetRead,
+    status_code=201,
+    tags=["Finance · Fixed Assets"],
+)
+async def new_fixed_asset(
+    payload: FixedAssetCreate,
+    request: Request,
+    user: User = Depends(asset_create),
+    db: AsyncSession = Depends(get_db),
+):
+    asset = await create_fixed_asset(db, user, payload)
+    await record_audit(
+        db,
+        user=user,
+        action="create",
+        module="finance",
+        entity="FixedAsset",
+        entity_id=asset.id,
+        changes=payload.model_dump(mode="json"),
+        request=request,
+    )
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ConflictError("Asset tag already exists in this tenant") from exc
+    await db.refresh(asset)
+    return asset
+
+
+@router.post(
+    "/assets/depreciation/run",
+    response_model=AssetDepreciationRunResult,
+    tags=["Finance · Fixed Assets"],
+)
+async def create_asset_depreciation_run(
+    payload: AssetDepreciationRun,
+    request: Request,
+    user: User = Depends(asset_update_and_post),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await run_asset_depreciation(db, user, payload.period_end)
+    await record_audit(
+        db,
+        user=user,
+        action="depreciation.run",
+        module="finance",
+        entity="AssetDepreciation",
+        changes={
+            "period_end": payload.period_end.isoformat(),
+            "created_count": result["created_count"],
+            "skipped_count": result["skipped_count"],
+        },
+        request=request,
+    )
+    await db.commit()
+    return result
+
+
+@router.get(
+    "/assets/{asset_id}",
+    response_model=FixedAssetRead,
+    tags=["Finance · Fixed Assets"],
+)
+async def get_fixed_asset(
+    asset_id: UUID,
+    user: User = Depends(asset_read),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(FixedAsset).where(FixedAsset.id == asset_id)
+    if not user.is_superuser:
+        stmt = stmt.where(FixedAsset.tenant_id == user.tenant_id)
+    asset = await db.scalar(stmt)
+    if asset is None:
+        raise NotFoundError("Fixed asset not found")
+    return asset
+
+
+@router.post(
+    "/assets/{asset_id}/capitalize",
+    response_model=JournalEntryRead,
+    tags=["Finance · Fixed Assets"],
+)
+async def capitalize_asset(
+    asset_id: UUID,
+    payload: AssetCapitalizationCreate,
+    request: Request,
+    user: User = Depends(asset_update_and_post),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(FixedAsset).where(FixedAsset.id == asset_id).with_for_update()
+    if not user.is_superuser:
+        stmt = stmt.where(FixedAsset.tenant_id == user.tenant_id)
+    asset = await db.scalar(stmt)
+    if asset is None:
+        raise NotFoundError("Fixed asset not found")
+    entry = await capitalize_fixed_asset(
+        db, user, asset, payload.credit_account_id
+    )
+    await record_audit(
+        db,
+        user=user,
+        action="capitalize",
+        module="finance",
+        entity="FixedAsset",
+        entity_id=asset.id,
+        changes={
+            "journal_entry_id": str(entry.id),
+            "credit_account_id": str(payload.credit_account_id),
+        },
+        request=request,
+    )
+    await db.commit()
+    return await get_journal_entry(db, user, entry.id)
+
+
+@router.post(
+    "/assets/{asset_id}/dispose",
+    response_model=JournalEntryRead,
+    tags=["Finance · Fixed Assets"],
+)
+async def dispose_asset(
+    asset_id: UUID,
+    payload: AssetDisposalCreate,
+    request: Request,
+    user: User = Depends(asset_update_and_post),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(FixedAsset).where(FixedAsset.id == asset_id).with_for_update()
+    if not user.is_superuser:
+        stmt = stmt.where(FixedAsset.tenant_id == user.tenant_id)
+    asset = await db.scalar(stmt)
+    if asset is None:
+        raise NotFoundError("Fixed asset not found")
+    entry = await dispose_fixed_asset(
+        db,
+        user,
+        asset,
+        disposed_on=payload.disposed_on,
+        proceeds=payload.proceeds,
+        proceeds_account_id=payload.proceeds_account_id,
+        gain_loss_account_id=payload.gain_loss_account_id,
+    )
+    await record_audit(
+        db,
+        user=user,
+        action="dispose",
+        module="finance",
+        entity="FixedAsset",
+        entity_id=asset.id,
+        changes={
+            "journal_entry_id": str(entry.id),
+            "disposed_on": payload.disposed_on.isoformat(),
+            "proceeds": str(payload.proceeds),
+        },
+        request=request,
+    )
+    await db.commit()
+    return await get_journal_entry(db, user, entry.id)

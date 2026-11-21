@@ -62,6 +62,7 @@ _include(
     load_options=(selectinload(Ticket.messages),),
     number_field="ticket_number",
     number_prefix="TKT",
+    number_key="ticket",
     after_create=ticket_created,
     after_update=ticket_updated,
 )

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -27,6 +27,13 @@ class Customer(TenantBaseModel):
 
 class SalesOrder(TenantBaseModel):
     __tablename__ = "sales_orders"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "order_number",
+            name="uq_sales_orders_tenant_number",
+        ),
+    )
 
     order_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     customer_id: Mapped[Optional[UUID]] = mapped_column(
@@ -97,6 +104,13 @@ class SalesOrderLine(TenantBaseModel):
 
 class DeliveryChallan(TenantBaseModel):
     __tablename__ = "sales_delivery_challans"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "challan_number",
+            name="uq_sales_delivery_challans_tenant_number",
+        ),
+    )
 
     challan_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     order_id: Mapped[UUID] = mapped_column(

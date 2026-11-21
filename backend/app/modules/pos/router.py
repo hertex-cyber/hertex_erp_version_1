@@ -14,7 +14,6 @@ from app.core.crud import build_crud_router
 from app.core.deps import require_permissions
 from app.core.events import publish
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
-from app.core.numbering import next_number
 from app.core.schemas import Page
 from app.db.session import get_db
 from app.modules.identity.models import User
@@ -26,6 +25,8 @@ from app.modules.pos.schemas import (
     PosSessionRead,
     PosSessionUpdate,
 )
+from app.modules.settings.numbering import commit as commit_number
+from app.modules.settings.numbering import consume_block, document_number
 
 router = APIRouter(prefix="/pos")
 
@@ -202,14 +203,40 @@ async def pos_checkout(
         resolved.append((line, product, unit_price, tax, base + tax, tax_snapshot))
 
     total = subtotal + tax_total
-    sale_number = await next_number(db, PosSale, "sale_number", "PS", user.tenant_id)
+    checkout_on = date.today()
+    block_header = request.headers.get("x-number-block-id")
+    if block_header:
+        try:
+            sale_allocation = await consume_block(
+                db, block_id=UUID(block_header), user=user
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("Invalid number block header") from exc
+    else:
+        sale_allocation = await document_number(
+            db,
+            key="pos_sale",
+            prefix="PS",
+            tenant_id=user.tenant_id,
+            on_date=checkout_on,
+            user=user,
+        )
+    sale_number = sale_allocation.rendered if hasattr(sale_allocation, "rendered") else sale_allocation
+    order_number = await document_number(
+        db,
+        key="sales_order",
+        prefix="SO",
+        tenant_id=user.tenant_id,
+        on_date=checkout_on,
+        user=user,
+    )
 
     order = SalesOrder(
         tenant_id=user.tenant_id,
         created_by_id=user.id,
-        order_number=await next_number(db, SalesOrder, "order_number", "SO", user.tenant_id),
+        order_number=order_number,
         customer_id=payload.customer_id,
-        order_date=date.today(),
+        order_date=checkout_on,
         status="fulfilled",
         channel="pos",
         subtotal=subtotal,
@@ -222,6 +249,9 @@ async def pos_checkout(
     )
     db.add(order)
     await db.flush()
+    await commit_number(
+        db, order_number, document_type="SalesOrder", document_id=order.id, user=user
+    )
 
     sale = PosSale(
         tenant_id=user.tenant_id,
@@ -239,6 +269,9 @@ async def pos_checkout(
     )
     db.add(sale)
     await db.flush()
+    await commit_number(
+        db, sale_allocation, document_type="PosSale", document_id=sale.id, user=user
+    )
 
     stmt = select(Warehouse).where(Warehouse.is_active.is_(True))
     if not user.is_superuser and user.tenant_id:
@@ -308,13 +341,22 @@ async def pos_checkout(
             )
         )
 
+    invoice_number = await document_number(
+        db,
+        key="invoice",
+        prefix="INV",
+        tenant_id=user.tenant_id,
+        on_date=checkout_on,
+        gstin=registration.gstin if registration else None,
+        user=user,
+    )
     invoice = Invoice(
         tenant_id=user.tenant_id,
         created_by_id=user.id,
-        invoice_number=await next_number(db, Invoice, "invoice_number", "INV", user.tenant_id),
+        invoice_number=invoice_number,
         customer_id=payload.customer_id,
-        issue_date=date.today(),
-        due_date=date.today() + timedelta(days=30),
+        issue_date=checkout_on,
+        due_date=checkout_on + timedelta(days=30),
         status="paid",
         subtotal=subtotal,
         tax=tax_total,
@@ -324,6 +366,9 @@ async def pos_checkout(
     )
     db.add(invoice)
     await db.flush()
+    await commit_number(
+        db, invoice_number, document_type="Invoice", document_id=invoice.id, user=user
+    )
     for resolved_line in resolved:
         tax_snapshot = resolved_line[5]
         if not tax_snapshot:

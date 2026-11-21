@@ -196,8 +196,21 @@ class PayrollRunRead(ORMModel):
     created_at: datetime
 
 
+class PayslipCreate(ORMModel):
+    payroll_run_id: UUID
+    employee_id: UUID
+    gross: Decimal = Decimal("0")
+    pf: Decimal = Decimal("0")
+    esi: Decimal = Decimal("0")
+    tds: Decimal = Decimal("0")
+    other_deductions: Decimal = Decimal("0")
+    net: Decimal = Decimal("0")
+    notes: Optional[str] = None
+
+
 class PayslipRead(ORMModel):
     id: UUID
+    payslip_number: str
     payroll_run_id: UUID
     employee_id: UUID
     gross: Decimal

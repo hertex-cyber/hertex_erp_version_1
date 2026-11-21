@@ -143,6 +143,7 @@ export function AccountsPage() {
         { key: 'name', label: 'Account', render: (row) => <Primary title={row.name} subtitle={row.code} /> },
         { key: 'account_type', label: 'Type', render: (row) => <TypeBadge value={row.account_type} /> },
         { key: 'parent_id', label: 'Parent', render: (row) => <Ref lookup="accounts" id={row.parent_id} /> },
+        { key: 'group_id', label: 'Group', render: (row) => <Ref lookup="account-groups" id={row.group_id} /> },
         { key: 'description', label: 'Description' },
         { key: 'is_active', label: 'Status', render: (row) => <Status value={row.is_active ? 'active' : 'inactive'} /> },
       ]}
@@ -151,6 +152,37 @@ export function AccountsPage() {
         { name: 'name', label: 'Account name', required: true },
         { name: 'account_type', label: 'Account type', type: 'select', options: ACCOUNT_TYPES, required: true },
         { name: 'parent_id', label: 'Parent account', type: 'reference', lookup: 'accounts' },
+        { name: 'group_id', label: 'Account group', type: 'reference', lookup: 'account-groups' },
+        { name: 'description', label: 'Description', type: 'textarea', colSpan: 2 },
+      ]}
+    />
+  )
+}
+
+export function AccountGroupsPage() {
+  return (
+    <ResourcePage
+      eyebrow="Finance"
+      title="Account groups"
+      description="Organize ledger accounts into typed reporting groups."
+      endpoint="/finance/account-groups"
+      permission="finance.account"
+      createLabel="New account group"
+      searchPlaceholder="Search group codes and names…"
+      filters={[{ name: 'account_type', label: 'All types', options: ACCOUNT_TYPES }]}
+      emptyIcon={BookOpen}
+      columns={[
+        { key: 'name', label: 'Group', render: (row) => <Primary title={row.name} subtitle={row.code} /> },
+        { key: 'account_type', label: 'Type', render: (row) => <TypeBadge value={row.account_type} /> },
+        { key: 'parent_id', label: 'Parent group', render: (row) => <Ref lookup="account-groups" id={row.parent_id} /> },
+        { key: 'description', label: 'Description' },
+        { key: 'is_active', label: 'Status', render: (row) => <Status value={row.is_active ? 'active' : 'inactive'} /> },
+      ]}
+      fields={[
+        { name: 'code', label: 'Group code', required: true },
+        { name: 'name', label: 'Group name', required: true },
+        { name: 'account_type', label: 'Account type', type: 'select', options: ACCOUNT_TYPES, required: true },
+        { name: 'parent_id', label: 'Parent group', type: 'reference', lookup: 'account-groups' },
         { name: 'description', label: 'Description', type: 'textarea', colSpan: 2 },
       ]}
     />

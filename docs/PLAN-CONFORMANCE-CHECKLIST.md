@@ -188,15 +188,17 @@ Note: the event names this sprint depends on are **already published** (`order.c
 |---|---|
 | Order Management | ✅ `sales/` |
 | Customer Support / Helpdesk | ✅ `support/` (Ticket, TicketMessage, event on message create) |
-| Project & Work Management (09a) | ✅ implemented / complete — 353 PM routes, 62 backend tests passing, frontend build + 15 tests passing, Alembic head `f4e2c8a7b913`, PM schema drift clean; OpenAPI PM snapshot checked (see note below) |
-| Settings / number sequences | ✅ `settings/` (AppSetting, NumberSequence) |
+| Project & Work Management (09a) | ⚠️ implemented with browser/performance verification gaps — 353 PM routes, 27 PM backend tests passing, frontend build + 6 project tests passing, OpenAPI PM snapshot checked; Playwright happy paths and large-data p95 benchmarks remain pending |
+| Settings / number sequences | 🟢 implemented / locally verified — 134 backend + 29 frontend + 3 Playwright tests, Alembic replay and both 100k gap benchmarks pass; open acceptance items are 100-way/mixed concurrency, pattern property/FY suites, pattern collision pre-check and feature-flag nav re-audit |
 | GST / e-invoicing (IRN, e-way bill, GSTR) | ❌ `Product.hsn_code`, `tax_rate` fields only |
 | Asset Management | ❌ |
 | Document Management | ❌ |
 | LMS | ❌ |
 | Manufacturing | ❌ (intentionally deferred by plan) |
 
-> **09a verification note (2026-11-18):** `alembic check` reports no Project Management drift. The remaining drift is unrelated, non-PM work: `finance_approvals`, `finance_vendor_payments`, `procurement_vendor_invoices`, and `sales_order_lines`. It is tracked separately and is not an 09a failure. The PM contract snapshot is `backend/openapi-project-management.json`, verified by `backend/scripts/check_openapi_snapshot.py` (349 distinct PM operations; no breaking changes).
+> **09a verification note (2026-11-20):** The 27 Project Management backend tests pass, including the previously failing outbox correlation and support-ticket completion integrations. The frontend build and 6 project helper tests pass. The PM OpenAPI snapshot is verified with 349 distinct PM operations and no breaking changes. Remaining acceptance gaps are Playwright happy paths and 100k/5k-item p95 benchmarks. The configured live database is at Alembic `f4e2c8a7b913`; later finance migrations remain blocked by live-schema drift and are outside this PM change.
+>
+> **Settings verification note (2026-11-21):** Backend 134 passed, frontend 29 passed, Playwright 3 passed, Alembic blank-DB replay + double seed passed, lint/secret-leak/OpenAPI snapshot gates passed. Synthetic and live 100k-row gap-report p95 are 162.19 ms and 272.84 ms. CI uses Redis 7; the local Redis 6.0 instance cannot start the Celery worker with the Redis 7 transport helpers.
 
 ---
 

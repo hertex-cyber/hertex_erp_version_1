@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -34,8 +35,36 @@ class Account(TenantBaseModel):
     parent_id: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="SET NULL"), nullable=True
     )
+    group_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("finance_account_groups.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class AccountGroup(TenantBaseModel):
+    __tablename__ = "finance_account_groups"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uq_finance_account_groups_tenant_code"),
+        CheckConstraint(
+            "account_type IN ('asset', 'liability', 'equity', 'income', 'expense')",
+            name="ck_finance_account_groups_type",
+        ),
+        Index("ix_finance_account_groups_tenant_type", "tenant_id", "account_type"),
+    )
+
+    code: Mapped[str] = mapped_column(String(30), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    account_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    parent_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("finance_account_groups.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class JournalEntry(TenantBaseModel):
@@ -43,6 +72,23 @@ class JournalEntry(TenantBaseModel):
     __table_args__ = (
         UniqueConstraint(
             "reversal_of_id", name="uq_finance_journal_entries_reversal_of"
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_finance_journal_entries_tenant_idempotency",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "entry_number",
+            name="uq_finance_journal_entries_tenant_number",
+        ),
+        Index(
+            "ix_finance_journal_entries_source_document",
+            "tenant_id",
+            "source_module",
+            "source_document_type",
+            "source_document_id",
         ),
     )
 
@@ -57,6 +103,13 @@ class JournalEntry(TenantBaseModel):
     posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     reversal_of_id: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("finance_journal_entries.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_module: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    source_document_type: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    source_document_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    legal_entity_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True, index=True
     )
 
     lines: Mapped[list["JournalLine"]] = relationship(
@@ -114,6 +167,14 @@ class JournalLine(TenantBaseModel):
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     debit: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     credit: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    branch_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), nullable=True, index=True)
+    cost_center_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True, index=True
+    )
+    department_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    project_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), nullable=True, index=True)
+    tax_code: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    tax_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
 
     entry: Mapped[JournalEntry] = relationship(back_populates="lines")
     account: Mapped[Account] = relationship(lazy="selectin")
@@ -209,6 +270,13 @@ class TaxCode(TenantBaseModel):
 
 class Invoice(TenantBaseModel):
     __tablename__ = "finance_invoices"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "invoice_number",
+            name="uq_finance_invoices_tenant_number",
+        ),
+    )
 
     invoice_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     customer_id: Mapped[Optional[UUID]] = mapped_column(
@@ -355,6 +423,50 @@ class GRNAccrual(TenantBaseModel):
         index=True,
     )
     accrued_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    cleared_amount: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0"), nullable=False
+    )
+
+
+class VendorInvoiceReceiptAllocation(TenantBaseModel):
+    __tablename__ = "finance_vendor_invoice_receipt_allocations"
+    __table_args__ = (
+        UniqueConstraint(
+            "vendor_invoice_id",
+            "grn_accrual_id",
+            name="uq_finance_invoice_receipt_allocations_invoice_accrual",
+        ),
+        CheckConstraint("allocated_amount > 0", name="ck_finance_invoice_receipt_allocations_amount"),
+        Index(
+            "ix_finance_invoice_receipt_allocations_accrual",
+            "tenant_id",
+            "grn_accrual_id",
+        ),
+    )
+
+    vendor_invoice_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("procurement_vendor_invoices.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    grn_accrual_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("finance_grn_accruals.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    goods_receipt_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("procurement_goods_receipts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    allocated_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    journal_line_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("finance_journal_lines.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
 
 class BankAccount(TenantBaseModel):
@@ -370,6 +482,41 @@ class BankAccount(TenantBaseModel):
     )
 
 
+class BankReconciliationStatement(TenantBaseModel):
+    __tablename__ = "finance_bank_statements"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "bank_account_id",
+            "statement_reference",
+            name="uq_finance_bank_statements_account_reference",
+        ),
+        CheckConstraint(
+            "period_start <= period_end",
+            name="ck_finance_bank_statements_period",
+        ),
+        CheckConstraint(
+            "status IN ('open', 'signed_off')",
+            name="ck_finance_bank_statements_status",
+        ),
+    )
+
+    bank_account_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_bank_accounts.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    statement_reference: Mapped[str] = mapped_column(String(120), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    opening_balance: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    closing_balance: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="open", nullable=False, index=True)
+    signed_off_by_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    signed_off_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    signoff_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+
 class BankTransaction(TenantBaseModel):
     __tablename__ = "finance_bank_transactions"
     __table_args__ = (
@@ -383,6 +530,12 @@ class BankTransaction(TenantBaseModel):
     bank_account_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("finance_bank_accounts.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    statement_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("finance_bank_statements.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     txn_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -391,4 +544,66 @@ class BankTransaction(TenantBaseModel):
     reconciled: Mapped[bool] = mapped_column(Boolean, default=False)
     matched_journal_line_id: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("finance_journal_lines.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class FixedAsset(TenantBaseModel):
+    __tablename__ = "finance_fixed_assets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "asset_tag", name="uq_finance_fixed_assets_tenant_tag"),
+        CheckConstraint("cost > 0", name="ck_finance_fixed_assets_positive_cost"),
+        CheckConstraint("residual_value >= 0 AND residual_value <= cost", name="ck_finance_fixed_assets_residual"),
+        CheckConstraint("useful_life_months > 0", name="ck_finance_fixed_assets_life"),
+        CheckConstraint(
+            "status IN ('draft', 'active', 'impaired', 'disposed', 'written_off')",
+            name="ck_finance_fixed_assets_status",
+        ),
+    )
+
+    asset_tag: Mapped[str] = mapped_column(String(60), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    acquisition_date: Mapped[date] = mapped_column(Date, nullable=False)
+    in_service_date: Mapped[date] = mapped_column(Date, nullable=False)
+    cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    residual_value: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
+    useful_life_months: Mapped[int] = mapped_column(Integer, nullable=False)
+    accumulated_depreciation: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
+    impairment_loss: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False, index=True)
+    asset_account_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="RESTRICT"), nullable=False
+    )
+    accumulated_depreciation_account_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="RESTRICT"), nullable=False
+    )
+    depreciation_expense_account_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="RESTRICT"), nullable=False
+    )
+    acquisition_credit_account_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_accounts.id", ondelete="RESTRICT"), nullable=True
+    )
+    acquisition_journal_entry_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_journal_entries.id", ondelete="RESTRICT"), nullable=True, unique=True
+    )
+    disposal_journal_entry_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_journal_entries.id", ondelete="RESTRICT"), nullable=True, unique=True
+    )
+    disposed_at: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+
+class AssetDepreciation(TenantBaseModel):
+    __tablename__ = "finance_asset_depreciations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "asset_id", "period_end", name="uq_finance_asset_depreciations_period"),
+        CheckConstraint("amount > 0", name="ck_finance_asset_depreciations_positive_amount"),
+    )
+
+    asset_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_fixed_assets.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    journal_entry_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("finance_journal_entries.id", ondelete="RESTRICT"), nullable=False, unique=True
     )

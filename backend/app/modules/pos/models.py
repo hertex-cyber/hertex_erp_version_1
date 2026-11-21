@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +26,13 @@ class PosSession(TenantBaseModel):
 
 class PosSale(TenantBaseModel):
     __tablename__ = "pos_sales"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "sale_number",
+            name="uq_pos_sales_tenant_number",
+        ),
+    )
 
     session_id: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("pos_sessions.id", ondelete="SET NULL"), nullable=True, index=True

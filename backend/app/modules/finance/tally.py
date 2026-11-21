@@ -14,11 +14,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
-from app.core.numbering import next_number
 from app.modules.finance.models import Account, JournalEntry, JournalLine
 from app.modules.finance.schemas import TallyImportResult
 from app.modules.finance.service import ensure_period_open
 from app.modules.identity.models import User
+from app.modules.settings.numbering import document_number
 
 _TYPE_RANGES = {
     "asset": 1000,
@@ -213,7 +213,9 @@ async def import_tally(
     reference = "TALLY:OPENING"
     existing_entry = await db.scalar(
         select(JournalEntry.id).where(
-            JournalEntry.reference == reference, JournalEntry.status == "posted"
+            JournalEntry.tenant_id == user.tenant_id,
+            JournalEntry.reference == reference,
+            JournalEntry.status == "posted",
         )
     )
     if existing_entry:
@@ -225,13 +227,23 @@ async def import_tally(
     entry = JournalEntry(
         tenant_id=user.tenant_id,
         created_by_id=user.id,
-        entry_number=await next_number(db, JournalEntry, "entry_number", "JE", user.tenant_id),
+        entry_number=await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=user.tenant_id,
+            on_date=opening_date,
+            user=user,
+        ),
         entry_date=opening_date,
         reference=reference,
         memo="Tally opening balances",
         status="posted",
         posted_by_id=user.id,
         posted_at=datetime.now(timezone.utc),
+        source_module="tally",
+        source_document_type="opening_balance",
+        idempotency_key="tally_opening_balance:post",
     )
     db.add(entry)
     await db.flush()

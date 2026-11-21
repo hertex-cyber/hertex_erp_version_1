@@ -61,6 +61,56 @@ class Settings(BaseSettings):
     REFRESH_COOKIE_NAME: str = "hertex_refresh"
     CSRF_COOKIE_NAME: str = "hertex_csrf"
 
+    # Settings module (half A): secret vault (AES-256-GCM). Generate with:
+    #   python -c "import secrets; print(secrets.token_hex(32))"
+    SETTINGS_ENCRYPTION_KEY: str = ""
+    SETTINGS_ENCRYPTION_KEY_VERSION: int = 1
+    SETTINGS_ENCRYPTION_KEY_PREVIOUS: str = ""
+    SETTINGS_ENCRYPTION_KEY_VERSION_PREVIOUS: int | None = None
+    SETTINGS_ENCRYPTION_KEY_RING: str = ""
+    EXPERIMENTAL_SETTINGS_ENCRYPTION_KEY: str = ""
+    SETTINGS_CACHE_TTL_SECONDS: int = 300
+
+    @staticmethod
+    def _derive_key_bytes(raw: str) -> bytes:
+        import hashlib
+
+        value = raw or ""
+        if len(value) == 64:
+            try:
+                return bytes.fromhex(value)
+            except ValueError:
+                pass
+        if value:
+            return value.encode("utf-8").ljust(32, b"0")[:32]
+        return hashlib.sha256(b"hertex-dev-settings-key").digest()
+
+    @property
+    def encryption_key_bytes(self) -> bytes:
+        """32 raw bytes for AES-256-GCM; derived from the hex or raw key string."""
+        return self._derive_key_bytes(self.SETTINGS_ENCRYPTION_KEY)
+
+    def encryption_keys(self) -> dict[int, bytes]:
+        import json
+
+        keys = {self.SETTINGS_ENCRYPTION_KEY_VERSION: self.encryption_key_bytes}
+        previous_version = self.SETTINGS_ENCRYPTION_KEY_VERSION_PREVIOUS
+        if self.SETTINGS_ENCRYPTION_KEY_PREVIOUS:
+            if previous_version is None:
+                previous_version = self.SETTINGS_ENCRYPTION_KEY_VERSION - 1
+            if previous_version and previous_version != self.SETTINGS_ENCRYPTION_KEY_VERSION:
+                keys[previous_version] = self._derive_key_bytes(
+                    self.SETTINGS_ENCRYPTION_KEY_PREVIOUS
+                )
+        ring = (self.SETTINGS_ENCRYPTION_KEY_RING or "").strip()
+        if ring:
+            raw_ring = json.loads(ring)
+            if not isinstance(raw_ring, dict):
+                raise ValueError("SETTINGS_ENCRYPTION_KEY_RING must be a JSON object")
+            for version, raw in raw_ring.items():
+                keys[int(version)] = self._derive_key_bytes(str(raw))
+        return keys
+
     @property
     def cookie_secure(self) -> bool:
         return self.ENVIRONMENT not in {"development", "test"}

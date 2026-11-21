@@ -49,6 +49,8 @@ class Tenant(BaseModel):
     plan: Mapped[str] = mapped_column(String(50), default="standard", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     settings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # Bumped on every settings write; resolved config caches validate against it.
+    settings_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default="1")
 
     users: Mapped[list["User"]] = relationship(back_populates="tenant", lazy="selectin")
 

@@ -1,4 +1,5 @@
-from datetime import date, datetime, timezone
+import calendar
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -10,13 +11,14 @@ from sqlalchemy.orm import selectinload
 
 from app.core.events import publish
 from app.core.exceptions import ConflictError, ValidationError
-from app.core.numbering import next_number
 from app.modules.finance.models import (
     Account,
+    AssetDepreciation,
     BankAccount,
     BankTransaction,
     FinanceApproval,
     FinancialPeriod,
+    FixedAsset,
     GRNAccrual,
     Invoice,
     InvoiceTaxLine,
@@ -25,9 +27,12 @@ from app.modules.finance.models import (
     Payment,
     TaxCode,
     TaxRegistration,
+    VendorInvoiceReceiptAllocation,
     VendorPayment,
 )
 from app.modules.finance.schemas import (
+    BankMatchRules,
+    FixedAssetCreate,
     JournalEntryCreate,
     JournalReversalCreate,
     PaymentCreate,
@@ -43,6 +48,9 @@ from app.modules.procurement.models import (
     VendorInvoice,
     VendorInvoiceTaxLine,
 )
+from app.modules.settings.numbering import commit as commit_number
+from app.modules.settings.numbering import document_number
+from app.modules.settings.service import settings_service
 
 # Canonical chart-of-accounts codes shared with the seed data.
 CASH = "1010"
@@ -67,6 +75,21 @@ GST_STATE_CODES = frozenset(
         "99",
     }
 )
+
+
+async def resolve_bank_match_rules(db: AsyncSession, user: User) -> BankMatchRules:
+    effective = await settings_service.resolve_all(db, tenant_id=user.tenant_id)
+    return BankMatchRules(
+        date_tolerance_days=effective["finance.bank.match.date_tolerance_days"],
+        amount_mode=effective["finance.bank.match.amount_mode"],
+        reference_required=effective["finance.bank.match.reference_required"],
+        max_candidates=effective["finance.bank.match.max_candidates"],
+    )
+
+
+def bank_match_date_bounds(txn_date: date, rules: BankMatchRules) -> tuple[date, date]:
+    delta = timedelta(days=rules.date_tolerance_days)
+    return txn_date - delta, txn_date + delta
 
 
 async def _account_by_code(
@@ -394,10 +417,59 @@ async def set_financial_period_status(
 
 
 async def create_journal_entry(
-    db: AsyncSession, user: User, payload: JournalEntryCreate
+    db: AsyncSession,
+    user: User,
+    payload: JournalEntryCreate,
+    *,
+    idempotency_key: Optional[str] = None,
 ) -> JournalEntry:
     _validate_lines(payload.lines)
     await ensure_period_open(db, user.tenant_id, payload.entry_date)
+    if idempotency_key is not None:
+        key = idempotency_key.strip()
+        if len(key) < 8 or len(key) > 128:
+            raise ValidationError("Idempotency key must be between 8 and 128 characters")
+        existing = await db.scalar(
+            select(JournalEntry)
+            .where(
+                JournalEntry.tenant_id == user.tenant_id,
+                JournalEntry.idempotency_key == key,
+            )
+            .options(selectinload(JournalEntry.lines))
+        )
+        if existing is not None:
+            existing_lines = sorted(
+                [
+                    (
+                    line.account_id,
+                    line.description,
+                    line.debit,
+                    line.credit,
+                    )
+                    for line in existing.lines
+                ],
+                key=lambda row: (str(row[0]), row[1] or "", row[2], row[3]),
+            )
+            requested_lines = sorted(
+                [
+                    (
+                    line.account_id,
+                    line.description,
+                    line.debit or Decimal("0"),
+                    line.credit or Decimal("0"),
+                    )
+                    for line in payload.lines
+                ],
+                key=lambda row: (str(row[0]), row[1] or "", row[2], row[3]),
+            )
+            if (
+                existing.entry_date != payload.entry_date
+                or existing.reference != payload.reference
+                or existing.memo != payload.memo
+                or existing_lines != requested_lines
+            ):
+                raise ConflictError("Idempotency key was already used for a different journal request")
+            return await get_journal_entry(db, user, existing.id)
     account_ids = {line.account_id for line in payload.lines}
     account_stmt = select(Account.id).where(
         Account.id.in_(account_ids),
@@ -408,7 +480,14 @@ async def create_journal_entry(
     if valid_account_ids != account_ids:
         raise ValidationError("Every journal line must use an active account in this tenant")
 
-    number = await next_number(db, JournalEntry, "entry_number", "JE", user.tenant_id)
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=user.tenant_id,
+            on_date=payload.entry_date,
+            user=user,
+        )
     entry = JournalEntry(
         tenant_id=user.tenant_id,
         created_by_id=user.id,
@@ -417,9 +496,15 @@ async def create_journal_entry(
         reference=payload.reference,
         memo=payload.memo,
         status="draft",
+        source_module="finance",
+        source_document_type="manual_journal",
+        idempotency_key=idempotency_key.strip() if idempotency_key else None,
     )
     db.add(entry)
     await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=entry.id, user=user
+    )
     for line in payload.lines:
         db.add(
             JournalLine(
@@ -506,7 +591,14 @@ async def reverse_journal_entry(
         return existing_reversal, False
 
     _validate_lines(entry.lines)
-    number = await next_number(db, JournalEntry, "entry_number", "JE", entry_tenant_id)
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=entry_tenant_id,
+            on_date=payload.reversal_date,
+            user=user,
+        )
     reversal = JournalEntry(
         tenant_id=entry.tenant_id,
         created_by_id=user.id,
@@ -553,6 +645,9 @@ async def reverse_journal_entry(
         ]
     )
     await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=reversal.id, user=user
+    )
     return await get_journal_entry(db, user, reversal.id), True
 
 
@@ -579,7 +674,14 @@ async def create_invoice_from_proposal(
     notes: Optional[str],
     reference: str,
 ) -> Invoice:
-    invoice_number = await next_number(db, Invoice, "invoice_number", "INV", user.tenant_id)
+    invoice_number = await document_number(
+            db,
+            key="invoice",
+            prefix="INV",
+            tenant_id=user.tenant_id,
+            on_date=issue_date,
+            user=user,
+        )
     invoice = Invoice(
         tenant_id=user.tenant_id,
         created_by_id=user.id,
@@ -596,6 +698,9 @@ async def create_invoice_from_proposal(
     )
     db.add(invoice)
     await db.flush()
+    await commit_number(
+        db, invoice_number, document_type="Invoice", document_id=invoice.id, user=user
+    )
     await post_invoice_journal(db, user, invoice)
     return invoice
 
@@ -626,7 +731,14 @@ async def post_invoice_journal(db: AsyncSession, user: User, invoice: Invoice) -
     ar = await _require_account(db, user.tenant_id, ACCOUNTS_RECEIVABLE, "accounts receivable")
     revenue = await _require_account(db, user.tenant_id, SALES_REVENUE, "sales revenue")
 
-    number = await next_number(db, JournalEntry, "entry_number", "JE", user.tenant_id)
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=user.tenant_id,
+            on_date=invoice.issue_date or date.today(),
+            user=user,
+        )
     entry = JournalEntry(
         tenant_id=user.tenant_id,
         created_by_id=user.id,
@@ -637,9 +749,16 @@ async def post_invoice_journal(db: AsyncSession, user: User, invoice: Invoice) -
         status="posted",
         posted_by_id=user.id,
         posted_at=datetime.now(timezone.utc),
+        source_module="sales",
+        source_document_type="invoice",
+        source_document_id=invoice.id,
+        idempotency_key=f"sales_invoice:{invoice.id}:post",
     )
     db.add(entry)
     await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=entry.id, user=user
+    )
     journal_lines = [
         JournalLine(
             tenant_id=user.tenant_id,
@@ -738,11 +857,46 @@ async def post_vendor_invoice_journal(
         raise ValidationError(
             "A goods receipt predates GRNI posting and requires reconciliation before invoice approval"
         )
-    if any(receipt.cleared_by_invoice_id is not None for receipt in receipts):
-        raise ConflictError("Goods receipt accruals are already cleared by another invoice")
-    accrued_amount = sum(
-        (receipt.accrued_amount for receipt in receipts), Decimal("0")
+    allocations = list(
+        (
+            await db.scalars(
+                select(VendorInvoiceReceiptAllocation)
+                .where(
+                    VendorInvoiceReceiptAllocation.vendor_invoice_id == invoice.id,
+                    VendorInvoiceReceiptAllocation.tenant_id == tenant_id,
+                )
+                .with_for_update()
+            )
+        ).all()
     )
+    if allocations:
+        receipt_by_id = {receipt.id: receipt for receipt in receipts}
+        allocation_ids = [allocation.grn_accrual_id for allocation in allocations]
+        if len(set(allocation_ids)) != len(allocation_ids) or any(
+            allocation_id not in receipt_by_id for allocation_id in allocation_ids
+        ):
+            raise ValidationError("Invoice allocations must reference this purchase order's GRN accruals")
+        allocation_total = sum(
+            (allocation.allocated_amount for allocation in allocations), Decimal("0")
+        )
+        if allocation_total != (invoice.amount or Decimal("0")):
+            raise ValidationError("Invoice allocations must total the invoice taxable amount")
+        for allocation in allocations:
+            receipt = receipt_by_id[allocation.grn_accrual_id]
+            cleared = receipt.cleared_amount or Decimal("0")
+            if cleared + allocation.allocated_amount > receipt.accrued_amount:
+                raise ConflictError("Invoice allocation exceeds the remaining GRN accrual")
+        accrued_amount = allocation_total
+    else:
+        if any(
+            receipt.cleared_by_invoice_id is not None
+            or (receipt.cleared_amount or Decimal("0")) > 0
+            for receipt in receipts
+        ):
+            raise ConflictError("Goods receipt accruals are already cleared by another invoice")
+        accrued_amount = sum(
+            (receipt.accrued_amount for receipt in receipts), Decimal("0")
+        )
     if accrued_amount <= 0:
         raise ValidationError("Goods receipt accrual total must be greater than zero")
 
@@ -752,7 +906,14 @@ async def post_vendor_invoice_journal(
         db, tenant_id, GOODS_RECEIVED_NOT_INVOICED, "goods received not invoiced"
     )
 
-    number = await next_number(db, JournalEntry, "entry_number", "JE", tenant_id)
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=tenant_id,
+            on_date=invoice.issue_date,
+            user=user,
+        )
     entry = JournalEntry(
         tenant_id=tenant_id,
         created_by_id=user.id,
@@ -763,9 +924,16 @@ async def post_vendor_invoice_journal(
         status="posted",
         posted_by_id=user.id,
         posted_at=datetime.now(timezone.utc),
+        source_module="procurement",
+        source_document_type="vendor_invoice",
+        source_document_id=invoice.id,
+        idempotency_key=f"vendor_invoice:{invoice.id}:post",
     )
     db.add(entry)
     await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=entry.id, user=user
+    )
     recoverable_tax_lines = await _tax_journal_lines(
         db,
         tenant_id,
@@ -775,15 +943,16 @@ async def post_vendor_invoice_journal(
     )
     recoverable_tax = sum((line.debit for line in recoverable_tax_lines), Decimal("0"))
     inventory_cost = invoice.amount + (invoice.tax_amount - recoverable_tax)
+    grni_line = JournalLine(
+        tenant_id=tenant_id,
+        journal_entry_id=entry.id,
+        account_id=grni.id,
+        description="Clear goods received not invoiced",
+        debit=accrued_amount,
+        credit=Decimal("0"),
+    )
     lines = [
-        JournalLine(
-            tenant_id=tenant_id,
-            journal_entry_id=entry.id,
-            account_id=grni.id,
-            description="Clear goods received not invoiced",
-            debit=accrued_amount,
-            credit=Decimal("0"),
-        ),
+        grni_line,
         JournalLine(
             tenant_id=tenant_id,
             journal_entry_id=entry.id,
@@ -818,8 +987,21 @@ async def post_vendor_invoice_journal(
             )
         )
     db.add_all(lines)
-    for receipt in receipts:
-        receipt.cleared_by_invoice_id = invoice.id
+    await db.flush()
+    if allocations:
+        receipt_by_id = {receipt.id: receipt for receipt in receipts}
+        for allocation in allocations:
+            receipt = receipt_by_id[allocation.grn_accrual_id]
+            receipt.cleared_amount = (
+                receipt.cleared_amount or Decimal("0")
+            ) + allocation.allocated_amount
+            if receipt.cleared_amount == receipt.accrued_amount:
+                receipt.cleared_by_invoice_id = invoice.id
+            allocation.journal_line_id = grni_line.id
+    else:
+        for receipt in receipts:
+            receipt.cleared_amount = receipt.accrued_amount
+            receipt.cleared_by_invoice_id = invoice.id
     await db.flush()
     return entry
 
@@ -862,7 +1044,14 @@ async def post_goods_receipt_accrual(
     grni = await _require_account(
         db, tenant_id, GOODS_RECEIVED_NOT_INVOICED, "goods received not invoiced"
     )
-    number = await next_number(db, JournalEntry, "entry_number", "JE", tenant_id)
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=tenant_id,
+            on_date=receipt.received_date,
+            user=user,
+        )
     entry = JournalEntry(
         tenant_id=tenant_id,
         created_by_id=user.id,
@@ -873,9 +1062,16 @@ async def post_goods_receipt_accrual(
         status="posted",
         posted_by_id=user.id,
         posted_at=datetime.now(timezone.utc),
+        source_module="procurement",
+        source_document_type="goods_receipt",
+        source_document_id=receipt.id,
+        idempotency_key=f"goods_receipt:{receipt.id}:grni",
     )
     db.add(entry)
     await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=entry.id, user=user
+    )
     db.add_all(
         [
             JournalLine(
@@ -961,7 +1157,14 @@ async def post_inventory_adjustment_journal(
         raise ValidationError("Inventory adjustment account must be an expense account")
 
     quantity_increase = stock_move.quantity > 0
-    number = await next_number(db, JournalEntry, "entry_number", "JE", stock_move.tenant_id)
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=stock_move.tenant_id,
+            on_date=entry_date,
+            user=user,
+        )
     entry = JournalEntry(
         tenant_id=stock_move.tenant_id,
         created_by_id=user.id,
@@ -972,9 +1175,16 @@ async def post_inventory_adjustment_journal(
         status="posted",
         posted_by_id=user.id,
         posted_at=datetime.now(timezone.utc),
+        source_module="inventory",
+        source_document_type="stock_adjustment",
+        source_document_id=stock_move.id,
+        idempotency_key=f"stock_adjustment:{stock_move.id}:post",
     )
     db.add(entry)
     await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=entry.id, user=user
+    )
     db.add_all(
         [
             JournalLine(
@@ -1094,7 +1304,14 @@ async def post_vendor_payment_journal(
     invoice.paid_amount += payment.amount
     invoice.status = "paid" if invoice.paid_amount == invoice_total else "partially_paid"
 
-    number = await next_number(db, JournalEntry, "entry_number", "JE", payment.tenant_id)
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=payment.tenant_id,
+            on_date=payment.paid_on,
+            user=user,
+        )
     entry = JournalEntry(
         tenant_id=payment.tenant_id,
         created_by_id=user.id,
@@ -1105,9 +1322,16 @@ async def post_vendor_payment_journal(
         status="posted",
         posted_by_id=user.id,
         posted_at=datetime.now(timezone.utc),
+        source_module="finance",
+        source_document_type="vendor_payment",
+        source_document_id=payment.id,
+        idempotency_key=f"vendor_payment:{payment.id}:post",
     )
     db.add(entry)
     await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=entry.id, user=user
+    )
     db.add_all(
         [
             JournalLine(
@@ -1186,7 +1410,14 @@ async def post_payroll_journal(
             raise ValidationError(f"Payroll account ({code}) must be a liability account")
         accounts[key] = account
 
-    number = await next_number(db, JournalEntry, "entry_number", "JE", payroll_run.tenant_id)
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=payroll_run.tenant_id,
+            on_date=entry_date,
+            user=user,
+        )
     entry = JournalEntry(
         tenant_id=payroll_run.tenant_id,
         created_by_id=user.id,
@@ -1197,9 +1428,16 @@ async def post_payroll_journal(
         status="posted",
         posted_by_id=user.id,
         posted_at=datetime.now(timezone.utc),
+        source_module="hr",
+        source_document_type="payroll_run",
+        source_document_id=payroll_run.id,
+        idempotency_key=f"payroll_run:{payroll_run.id}:post",
     )
     db.add(entry)
     await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=entry.id, user=user
+    )
     lines = [
         JournalLine(
             tenant_id=payroll_run.tenant_id,
@@ -1316,7 +1554,14 @@ async def create_payment(
     invoice.status = "paid" if invoice.amount_paid == invoice.total else "partially_paid"
 
     ar = await _require_account(db, user.tenant_id, ACCOUNTS_RECEIVABLE, "accounts receivable")
-    number = await next_number(db, JournalEntry, "entry_number", "JE", user.tenant_id)
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=user.tenant_id,
+            on_date=payload.paid_on,
+            user=user,
+        )
     entry = JournalEntry(
         tenant_id=user.tenant_id,
         entry_number=number,
@@ -1326,9 +1571,16 @@ async def create_payment(
         status="posted",
         posted_by_id=user.id,
         posted_at=datetime.now(timezone.utc),
+        source_module="finance",
+        source_document_type="customer_payment",
+        source_document_id=payment.id,
+        idempotency_key=f"customer_payment:{payment.id}:post",
     )
     db.add(entry)
     await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=entry.id, user=user
+    )
     db.add_all(
         [
             JournalLine(
@@ -1613,7 +1865,9 @@ async def accounting_exceptions(db: AsyncSession, user: User) -> dict:
         BankTransaction,
     )) or 0)
     open_grni_receipts = int(await db.scalar(scope(
-        select(func.count()).select_from(GRNAccrual).where(GRNAccrual.cleared_by_invoice_id.is_(None)),
+        select(func.count()).select_from(GRNAccrual).where(
+            GRNAccrual.accrued_amount - func.coalesce(GRNAccrual.cleared_amount, 0) > 0
+        ),
         GRNAccrual,
     )) or 0)
 
@@ -1680,3 +1934,430 @@ async def receivables(db: AsyncSession, user: User) -> list[ReceivableRow]:
             )
         )
     return rows
+
+
+async def _asset_gl_account(
+    db: AsyncSession,
+    tenant_id: UUID,
+    account_id: UUID,
+    expected_type: str,
+    label: str,
+) -> Account:
+    account = await db.scalar(
+        select(Account).where(
+            Account.id == account_id,
+            Account.tenant_id == tenant_id,
+            Account.is_active.is_(True),
+            Account.account_type == expected_type,
+        )
+    )
+    if account is None:
+        raise ValidationError(
+            f"{label} must be an active same-tenant {expected_type} account"
+        )
+    return account
+
+
+async def create_fixed_asset(
+    db: AsyncSession, user: User, payload: FixedAssetCreate
+) -> FixedAsset:
+    if user.tenant_id is None:
+        raise ValidationError("A tenant is required to manage fixed assets")
+    if payload.in_service_date < payload.acquisition_date:
+        raise ValidationError("In-service date cannot be before acquisition date")
+    if payload.residual_value > payload.cost:
+        raise ValidationError("Residual value cannot exceed asset cost")
+    for account_id, expected_type, label in (
+        (payload.asset_account_id, "asset", "Asset ledger"),
+        (
+            payload.accumulated_depreciation_account_id,
+            "asset",
+            "Accumulated depreciation ledger",
+        ),
+        (
+            payload.depreciation_expense_account_id,
+            "expense",
+            "Depreciation expense ledger",
+        ),
+    ):
+        await _asset_gl_account(
+            db, user.tenant_id, account_id, expected_type, label
+        )
+    asset = FixedAsset(
+        tenant_id=user.tenant_id,
+        created_by_id=user.id,
+        asset_tag=payload.asset_tag,
+        name=payload.name,
+        description=payload.description,
+        acquisition_date=payload.acquisition_date,
+        in_service_date=payload.in_service_date,
+        cost=payload.cost,
+        residual_value=payload.residual_value,
+        useful_life_months=payload.useful_life_months,
+        asset_account_id=payload.asset_account_id,
+        accumulated_depreciation_account_id=payload.accumulated_depreciation_account_id,
+        depreciation_expense_account_id=payload.depreciation_expense_account_id,
+        status="draft",
+    )
+    db.add(asset)
+    await db.flush()
+    return asset
+
+
+async def capitalize_fixed_asset(
+    db: AsyncSession,
+    user: User,
+    asset: FixedAsset,
+    credit_account_id: UUID,
+) -> JournalEntry:
+    if asset.tenant_id != user.tenant_id and not user.is_superuser:
+        raise ValidationError("Fixed asset belongs to a different tenant")
+    if asset.acquisition_journal_entry_id is not None:
+        entry = await db.get(JournalEntry, asset.acquisition_journal_entry_id)
+        if entry is None:
+            raise ValidationError("Fixed asset acquisition journal link is missing")
+        if asset.acquisition_credit_account_id != credit_account_id:
+            raise ConflictError("Asset was already capitalized using a different credit account")
+        return entry
+    if asset.status != "draft":
+        raise ConflictError("Only draft assets can be capitalized")
+    await ensure_period_open(db, asset.tenant_id, asset.acquisition_date)
+    asset_account = await _asset_gl_account(
+        db, asset.tenant_id, asset.asset_account_id, "asset", "Asset ledger"
+    )
+    credit_account = await db.scalar(
+        select(Account).where(
+            Account.id == credit_account_id,
+            Account.tenant_id == asset.tenant_id,
+            Account.is_active.is_(True),
+            Account.account_type.in_(("asset", "liability")),
+        )
+    )
+    if credit_account is None:
+        raise ValidationError("Acquisition credit must be an active asset or liability account")
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=asset.tenant_id,
+            on_date=asset.acquisition_date,
+            user=user,
+        )
+    entry = JournalEntry(
+        tenant_id=asset.tenant_id,
+        created_by_id=user.id,
+        entry_number=number,
+        entry_date=asset.acquisition_date,
+        reference=f"ASSET:{asset.asset_tag}:ACQUISITION",
+        memo=f"Capitalization of fixed asset {asset.name}",
+        status="posted",
+        posted_by_id=user.id,
+        posted_at=datetime.now(timezone.utc),
+        source_module="finance",
+        source_document_type="fixed_asset",
+        source_document_id=asset.id,
+        idempotency_key=f"fixed_asset:{asset.id}:acquisition",
+    )
+    db.add(entry)
+    await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=entry.id, user=user
+    )
+    db.add_all(
+        [
+            JournalLine(
+                tenant_id=asset.tenant_id,
+                created_by_id=user.id,
+                journal_entry_id=entry.id,
+                account_id=asset_account.id,
+                description=f"Fixed asset: {asset.asset_tag}",
+                debit=asset.cost,
+                credit=Decimal("0"),
+            ),
+            JournalLine(
+                tenant_id=asset.tenant_id,
+                created_by_id=user.id,
+                journal_entry_id=entry.id,
+                account_id=credit_account.id,
+                description=f"Asset acquisition clearing: {asset.asset_tag}",
+                debit=Decimal("0"),
+                credit=asset.cost,
+            ),
+        ]
+    )
+    asset.acquisition_credit_account_id = credit_account.id
+    asset.acquisition_journal_entry_id = entry.id
+    asset.status = "active"
+    await db.flush()
+    return entry
+
+
+async def run_asset_depreciation(
+    db: AsyncSession, user: User, period_end: date
+) -> dict:
+    final_day = calendar.monthrange(period_end.year, period_end.month)[1]
+    normalized_end = date(period_end.year, period_end.month, final_day)
+    if normalized_end != period_end:
+        raise ValidationError("Depreciation period must be the final calendar day of a month")
+    if user.tenant_id is None:
+        raise ValidationError("A tenant is required to run asset depreciation")
+    assets = list(
+        (
+            await db.scalars(
+                select(FixedAsset)
+                .where(
+                    FixedAsset.tenant_id == user.tenant_id,
+                    FixedAsset.status == "active",
+                    FixedAsset.acquisition_journal_entry_id.is_not(None),
+                    FixedAsset.in_service_date < date(
+                        period_end.year, period_end.month, 1
+                    ),
+                )
+                .order_by(FixedAsset.asset_tag)
+                .with_for_update()
+            )
+        ).all()
+    )
+    result_entries = []
+    skipped_count = 0
+    for asset in assets:
+        existing = await db.scalar(
+            select(AssetDepreciation).where(
+                AssetDepreciation.tenant_id == user.tenant_id,
+                AssetDepreciation.asset_id == asset.id,
+                AssetDepreciation.period_end == period_end,
+            )
+        )
+        if existing is not None:
+            skipped_count += 1
+            continue
+        depreciable_value = asset.cost - asset.residual_value
+        remaining_value = depreciable_value - asset.accumulated_depreciation
+        if remaining_value <= 0:
+            skipped_count += 1
+            continue
+        amount = min(
+            (depreciable_value / Decimal(asset.useful_life_months)).quantize(Decimal("0.01")),
+            remaining_value,
+        )
+        if amount <= 0:
+            skipped_count += 1
+            continue
+        await ensure_period_open(db, asset.tenant_id, period_end)
+        expense = await _asset_gl_account(
+            db,
+            asset.tenant_id,
+            asset.depreciation_expense_account_id,
+            "expense",
+            "Depreciation expense ledger",
+        )
+        accumulated = await _asset_gl_account(
+            db,
+            asset.tenant_id,
+            asset.accumulated_depreciation_account_id,
+            "asset",
+            "Accumulated depreciation ledger",
+        )
+        number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=asset.tenant_id,
+            on_date=period_end,
+            user=user,
+        )
+        entry = JournalEntry(
+            tenant_id=asset.tenant_id,
+            created_by_id=user.id,
+            entry_number=number,
+            entry_date=period_end,
+            reference=f"ASSET:{asset.asset_tag}:DEPR:{period_end:%Y%m}",
+            memo=f"Straight-line depreciation for {asset.name}",
+            status="posted",
+            posted_by_id=user.id,
+            posted_at=datetime.now(timezone.utc),
+            source_module="finance",
+            source_document_type="asset_depreciation",
+            source_document_id=asset.id,
+            idempotency_key=f"asset_depreciation:{asset.id}:{period_end:%Y%m}",
+        )
+        db.add(entry)
+        await db.flush()
+        await commit_number(
+            db, number, document_type="JournalEntry", document_id=entry.id, user=user
+        )
+        db.add_all(
+            [
+                JournalLine(
+                    tenant_id=asset.tenant_id,
+                    created_by_id=user.id,
+                    journal_entry_id=entry.id,
+                    account_id=expense.id,
+                    description=f"Depreciation expense: {asset.asset_tag}",
+                    debit=amount,
+                    credit=Decimal("0"),
+                ),
+                JournalLine(
+                    tenant_id=asset.tenant_id,
+                    created_by_id=user.id,
+                    journal_entry_id=entry.id,
+                    account_id=accumulated.id,
+                    description=f"Accumulated depreciation: {asset.asset_tag}",
+                    debit=Decimal("0"),
+                    credit=amount,
+                ),
+            ]
+        )
+        depreciation = AssetDepreciation(
+            tenant_id=asset.tenant_id,
+            created_by_id=user.id,
+            asset_id=asset.id,
+            period_end=period_end,
+            amount=amount,
+            journal_entry_id=entry.id,
+        )
+        db.add(depreciation)
+        asset.accumulated_depreciation += amount
+        result_entries.append(depreciation)
+        await db.flush()
+    return {
+        "period_end": period_end,
+        "created_count": len(result_entries),
+        "skipped_count": skipped_count,
+        "depreciations": result_entries,
+    }
+
+
+async def dispose_fixed_asset(
+    db: AsyncSession,
+    user: User,
+    asset: FixedAsset,
+    *,
+    disposed_on: date,
+    proceeds: Decimal,
+    proceeds_account_id: UUID,
+    gain_loss_account_id: UUID,
+) -> JournalEntry:
+    if asset.tenant_id != user.tenant_id and not user.is_superuser:
+        raise ValidationError("Fixed asset belongs to a different tenant")
+    if asset.status != "active":
+        raise ConflictError("Only active fixed assets can be disposed")
+    if asset.acquisition_journal_entry_id is None:
+        raise ValidationError("Asset must be capitalized before disposal")
+    if proceeds < 0 or proceeds != proceeds.quantize(Decimal("0.01")):
+        raise ValidationError("Disposal proceeds must be non-negative with two decimal places")
+    await ensure_period_open(db, asset.tenant_id, disposed_on)
+    if disposed_on < asset.acquisition_date:
+        raise ValidationError("Disposal date cannot be before acquisition")
+    proceeds_account = await _asset_gl_account(
+        db, asset.tenant_id, proceeds_account_id, "asset", "Proceeds"
+    )
+    asset_account = await _asset_gl_account(
+        db, asset.tenant_id, asset.asset_account_id, "asset", "Asset ledger"
+    )
+    accumulated_account = await _asset_gl_account(
+        db,
+        asset.tenant_id,
+        asset.accumulated_depreciation_account_id,
+        "asset",
+        "Accumulated depreciation ledger",
+    )
+    carrying_value = asset.cost - asset.accumulated_depreciation
+    difference = proceeds - carrying_value
+    gain_loss_type = "income" if difference > 0 else "expense"
+    gain_loss_account = await _asset_gl_account(
+        db, asset.tenant_id, gain_loss_account_id, gain_loss_type, "Gain/loss"
+    ) if difference != 0 else None
+    number = await document_number(
+            db,
+            key="journal_entry",
+            prefix="JE",
+            tenant_id=asset.tenant_id,
+            on_date=disposed_on,
+            user=user,
+        )
+    entry = JournalEntry(
+        tenant_id=asset.tenant_id,
+        created_by_id=user.id,
+        entry_number=number,
+        entry_date=disposed_on,
+        reference=f"ASSET:{asset.asset_tag}:DISPOSAL",
+        memo=f"Disposal of fixed asset {asset.name}",
+        status="posted",
+        posted_by_id=user.id,
+        posted_at=datetime.now(timezone.utc),
+        source_module="finance",
+        source_document_type="asset_disposal",
+        source_document_id=asset.id,
+        idempotency_key=f"fixed_asset:{asset.id}:disposal",
+    )
+    db.add(entry)
+    await db.flush()
+    await commit_number(
+        db, number, document_type="JournalEntry", document_id=entry.id, user=user
+    )
+    journal_lines = [
+        JournalLine(
+            tenant_id=asset.tenant_id,
+            created_by_id=user.id,
+            journal_entry_id=entry.id,
+            account_id=asset_account.id,
+            description=f"Remove asset cost: {asset.asset_tag}",
+            debit=Decimal("0"),
+            credit=asset.cost,
+        ),
+    ]
+    if proceeds > 0:
+        journal_lines.append(
+            JournalLine(
+                tenant_id=asset.tenant_id,
+                created_by_id=user.id,
+                journal_entry_id=entry.id,
+                account_id=proceeds_account.id,
+                description=f"Disposal proceeds: {asset.asset_tag}",
+                debit=proceeds,
+                credit=Decimal("0"),
+            )
+        )
+    if asset.accumulated_depreciation > 0:
+        journal_lines.append(
+            JournalLine(
+                tenant_id=asset.tenant_id,
+                created_by_id=user.id,
+                journal_entry_id=entry.id,
+                account_id=accumulated_account.id,
+                description=f"Remove accumulated depreciation: {asset.asset_tag}",
+                debit=asset.accumulated_depreciation,
+                credit=Decimal("0"),
+            )
+        )
+    if difference > 0:
+        journal_lines.append(
+            JournalLine(
+                tenant_id=asset.tenant_id,
+                created_by_id=user.id,
+                journal_entry_id=entry.id,
+                account_id=gain_loss_account.id,
+                description=f"Gain on disposal: {asset.asset_tag}",
+                debit=Decimal("0"),
+                credit=difference,
+            )
+        )
+    elif difference < 0:
+        journal_lines.append(
+            JournalLine(
+                tenant_id=asset.tenant_id,
+                created_by_id=user.id,
+                journal_entry_id=entry.id,
+                account_id=gain_loss_account.id,
+                description=f"Loss on disposal: {asset.asset_tag}",
+                debit=-difference,
+                credit=Decimal("0"),
+            )
+        )
+    db.add_all(journal_lines)
+    asset.status = "disposed"
+    asset.disposed_at = disposed_on
+    asset.disposal_journal_entry_id = entry.id
+    await db.flush()
+    return entry

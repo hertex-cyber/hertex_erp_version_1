@@ -7,12 +7,29 @@ import { toast } from '../../store/toast'
 
 const PAGE_SIZE = 50
 
+const DEFAULT_MATCH_RULES = {
+  date_tolerance_days: 14,
+  amount_mode: 'signed',
+  reference_required: false,
+  max_candidates: 20,
+}
+
 export default function BankReconciliationPage() {
   const [accounts, setAccounts] = useState([])
   const [bankAccountId, setBankAccountId] = useState('')
+  const [statements, setStatements] = useState([])
+  const [statementId, setStatementId] = useState('')
+  const [statementSummary, setStatementSummary] = useState(null)
+  const [statementReference, setStatementReference] = useState('')
+  const [periodStart, setPeriodStart] = useState('')
+  const [periodEnd, setPeriodEnd] = useState('')
+  const [openingBalance, setOpeningBalance] = useState('0.00')
+  const [closingBalance, setClosingBalance] = useState('0.00')
+  const [statementSaving, setStatementSaving] = useState(false)
   const [summary, setSummary] = useState(null)
   const [transactions, setTransactions] = useState([])
   const [candidates, setCandidates] = useState([])
+  const [matchRules, setMatchRules] = useState(DEFAULT_MATCH_RULES)
   const [selectedTransaction, setSelectedTransaction] = useState(null)
   const [undoTarget, setUndoTarget] = useState(null)
   const [undoReason, setUndoReason] = useState('')
@@ -28,6 +45,9 @@ export default function BankReconciliationPage() {
 
   useEffect(() => {
     let active = true
+    api.get('/finance/bank-transactions/match-rules')
+      .then(({ data }) => active && setMatchRules(data))
+      .catch(() => active && setMatchRules(DEFAULT_MATCH_RULES))
     api.get('/finance/bank-accounts', { params: { size: 200 } })
       .then(({ data }) => {
         if (!active) return
@@ -64,6 +84,39 @@ export default function BankReconciliationPage() {
 
   useEffect(() => { load() }, [load])
 
+  const loadStatements = useCallback(async () => {
+    if (!bankAccountId) {
+      setStatements([])
+      setStatementId('')
+      setStatementSummary(null)
+      return
+    }
+    try {
+      const { data } = await api.get('/finance/bank-statements', {
+        params: { bank_account_id: bankAccountId, size: 200 },
+      })
+      const rows = data.items ?? []
+      setStatements(rows)
+      setStatementId((current) => rows.some((row) => row.id === current) ? current : '')
+    } catch (requestError) {
+      toast.error('Could not load bank statements', apiErrorMessage(requestError))
+    }
+  }, [bankAccountId])
+
+  useEffect(() => { loadStatements() }, [loadStatements])
+
+  useEffect(() => {
+    if (!statementId) {
+      setStatementSummary(null)
+      return
+    }
+    let active = true
+    api.get(`/finance/bank-statements/${statementId}/summary`)
+      .then(({ data }) => active && setStatementSummary(data))
+      .catch((requestError) => active && toast.error('Could not load statement balance', apiErrorMessage(requestError)))
+    return () => { active = false }
+  }, [statementId])
+
   const activeAccount = useMemo(
     () => accounts.find((account) => account.id === bankAccountId),
     [accounts, bankAccountId],
@@ -74,6 +127,7 @@ export default function BankReconciliationPage() {
     if (!bankAccountId || !file) return
     const body = new FormData()
     body.append('bank_account_id', bankAccountId)
+    if (statementId) body.append('statement_id', statementId)
     body.append('file', file)
     setImporting(true)
     try {
@@ -86,10 +140,51 @@ export default function BankReconciliationPage() {
       event.currentTarget.reset()
       setPage(1)
       await load()
+      await loadStatements()
     } catch (requestError) {
       toast.error('Could not import statement', apiErrorMessage(requestError))
     } finally {
       setImporting(false)
+    }
+  }
+
+  const createStatement = async (event) => {
+    event.preventDefault()
+    if (!bankAccountId || !statementReference.trim() || !periodStart || !periodEnd) return
+    setStatementSaving(true)
+    try {
+      const { data } = await api.post('/finance/bank-statements', {
+        bank_account_id: bankAccountId,
+        statement_reference: statementReference.trim(),
+        period_start: periodStart,
+        period_end: periodEnd,
+        opening_balance: openingBalance,
+        closing_balance: closingBalance,
+      })
+      toast.success('Statement created', 'Matching imported lines will be attached to this statement period.')
+      setStatementReference('')
+      await loadStatements()
+      setStatementId(data.id)
+    } catch (requestError) {
+      toast.error('Could not create statement', apiErrorMessage(requestError))
+    } finally {
+      setStatementSaving(false)
+    }
+  }
+
+  const signOffStatement = async () => {
+    if (!statementId || !statementSummary?.signable) return
+    const reason = window.prompt('Enter the bank statement sign-off reason')
+    if (!reason || reason.trim().length < 3) {
+      toast.error('Sign-off reason required', 'Provide a reason of at least 3 characters.')
+      return
+    }
+    try {
+      await api.post(`/finance/bank-statements/${statementId}/sign-off`, { reason: reason.trim() })
+      toast.success('Statement signed off', 'The reconciled bank statement is now locked.')
+      await loadStatements()
+    } catch (requestError) {
+      toast.error('Could not sign off statement', apiErrorMessage(requestError))
     }
   }
 
@@ -193,8 +288,73 @@ export default function BankReconciliationPage() {
         </div>
       )}
 
+      <SectionCard
+        title="Statement period and sign-off"
+        description="Record statement opening and closing balances, then sign off only when imported lines and linked journals reconcile."
+        className="mb-5"
+      >
+        <div className="grid gap-5 p-5 xl:grid-cols-[1fr_1.2fr]">
+          <div className="grid content-start gap-3">
+            <label className="grid gap-1 text-[11px] font-semibold text-muted">
+              Existing statement
+              <select className="input" value={statementId} onChange={(event) => setStatementId(event.target.value)}>
+                <option value="">No statement selected</option>
+                {statements.map((statement) => (
+                  <option key={statement.id} value={statement.id}>
+                    {statement.statement_reference} · {statement.period_start} – {statement.period_end} · {statement.status}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {statementSummary && (
+              <div className="rounded-xl border border-line bg-surface-2/50 p-3 text-xs">
+                <div className="grid grid-cols-2 gap-2">
+                  <p>Imported / reconciled: <strong>{statementSummary.imported_count} / {statementSummary.reconciled_count}</strong></p>
+                  <p>Difference: <strong>{money(statementSummary.difference)}</strong></p>
+                  <p>Expected close: <strong>{money(statementSummary.statement.closing_balance)}</strong></p>
+                  <p>Ledger-linked close: <strong>{money(statementSummary.implied_closing_balance)}</strong></p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-primary mt-3"
+                  onClick={signOffStatement}
+                  disabled={!statementSummary.signable || statementSummary.statement.status !== 'open'}
+                >
+                  {statementSummary.statement.status === 'signed_off' ? 'Signed off' : 'Sign off statement'}
+                </button>
+              </div>
+            )}
+          </div>
+          <form onSubmit={createStatement} className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1 text-[11px] font-semibold text-muted sm:col-span-2">
+              Statement reference
+              <input className="input" value={statementReference} onChange={(event) => setStatementReference(event.target.value)} required maxLength={120} />
+            </label>
+            <label className="grid gap-1 text-[11px] font-semibold text-muted">
+              Period start
+              <input className="input" type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} required />
+            </label>
+            <label className="grid gap-1 text-[11px] font-semibold text-muted">
+              Period end
+              <input className="input" type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} required />
+            </label>
+            <label className="grid gap-1 text-[11px] font-semibold text-muted">
+              Opening balance
+              <input className="input" type="number" step="0.01" value={openingBalance} onChange={(event) => setOpeningBalance(event.target.value)} required />
+            </label>
+            <label className="grid gap-1 text-[11px] font-semibold text-muted">
+              Closing balance
+              <input className="input" type="number" step="0.01" value={closingBalance} onChange={(event) => setClosingBalance(event.target.value)} required />
+            </label>
+            <button type="submit" className="btn-secondary sm:col-span-2" disabled={!bankAccountId || statementSaving}>
+              {statementSaving ? 'Creating…' : 'Create statement period'}
+            </button>
+          </form>
+        </div>
+      </SectionCard>
+
       <div className="mb-5 grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
-        <SectionCard title="Import bank statement" description="CSV columns: date, amount, description (or narration), reference (optional). Positive amounts are deposits; negative amounts are withdrawals.">
+        <SectionCard title="Import bank statement" description="CSV columns: date, amount, description (or narration), reference (optional). Choose a statement period above to attach and validate these rows.">
           <form onSubmit={importStatement} className="grid gap-3 p-5">
             <input
               type="file"
@@ -306,6 +466,7 @@ export default function BankReconciliationPage() {
           transaction={selectedTransaction}
           candidates={candidates}
           loading={matching}
+          rules={matchRules}
           onClose={() => setSelectedTransaction(null)}
           onMatch={match}
         />
@@ -336,7 +497,7 @@ export default function BankReconciliationPage() {
   )
 }
 
-function MatchDialog({ transaction, candidates, loading, onClose, onMatch }) {
+function MatchDialog({ transaction, candidates, loading, rules, onClose, onMatch }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-forest/50 p-0 backdrop-blur-sm sm:items-center sm:p-6">
       <button type="button" className="absolute inset-0" aria-label="Close match suggestions" onClick={onClose} />
@@ -344,7 +505,7 @@ function MatchDialog({ transaction, candidates, loading, onClose, onMatch }) {
         <div className="border-b border-line px-5 py-4">
           <h2 className="text-base font-bold text-ink">Match statement line</h2>
           <p className="mt-1 text-xs text-muted">{transaction.description || 'Bank transaction'} · {dateLabel(transaction.txn_date)} · {money(transaction.amount)}</p>
-          <p className="mt-1 text-[11px] text-muted">Suggestions require the same bank GL account and signed amount, within 14 days. Reconciliation is a separate confirmation.</p>
+          <p className="mt-1 text-[11px] text-muted">Suggestions require the same bank GL account, {rules.amount_mode === 'absolute' ? 'absolute amount' : 'signed amount'}{rules.reference_required ? ' and matching reference' : ''}, within {rules.date_tolerance_days} days. Reconciliation is a separate confirmation.</p>
         </div>
         <div className="max-h-[55vh] overflow-y-auto">
           {loading ? (
@@ -362,7 +523,7 @@ function MatchDialog({ transaction, candidates, loading, onClose, onMatch }) {
               ))}
             </div>
           ) : (
-            <EmptyState compact icon={CircleAlert} title="No exact suggestions" description="No unmatched posted bank-ledger line has the same signed amount within the date window. Review the ledger or leave this line in the exception queue." />
+            <EmptyState compact icon={CircleAlert} title="No exact suggestions" description={`No unmatched posted bank-ledger line has the same ${rules.amount_mode === 'absolute' ? 'absolute' : 'signed'} amount within ${rules.date_tolerance_days} days. Review the ledger or leave this line in the exception queue.`} />
           )}
         </div>
         <div className="flex justify-end border-t border-line px-5 py-3">

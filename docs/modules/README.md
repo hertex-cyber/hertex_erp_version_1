@@ -29,6 +29,7 @@ Deep, code-verified module planning for **hertex-erp**. Each doc follows the 18-
 | 13 | [ANALYTICS](13-ANALYTICS.md) | Materialised views, report registry, export, AI digest | ✅ | — |
 | 14 | [AI](14-AI.md) | Ask Hertex LLM, Tier 1 models, Tier 3 action layer | ✅ | — |
 | 15 | [SETTINGS](15-SETTINGS.md) | App settings + atomic document numbering (FY-aware) | ✅ | — |
+| 15A | [SETTINGS IMPLEMENTATION PLAN](15A-SETTINGS-IMPLEMENTATION-PLAN.md) | Zoho/SAP/Odoo-grade settings: typed registry + layered resolution, atomic FY numbering engine, GST Rule 46 channel profiles, gap ledger, POS offline blocks, secrets vault | 🟢 implemented / locally verified | 134 backend + 29 frontend + 3 Playwright tests, Alembic replay and gap benchmarks pass; open items: 100-way/mixed concurrency, pattern property/FY suites, collision pre-check, feature-flag nav re-audit |
 | 16 | [IDENTITY](16-IDENTITY.md) | Auth, RBAC, field-level security (D4), audit | ✅ | — |
 | 16a | [AUTH IMPLEMENTATION PLAN](16-IDENTITY-AUTH-IMPLEMENTATION-PLAN.md) | Zoho/SAP-style auth hardening: password policy, MFA, session rotation, recovery, security headers | 🟢 implemented | P4 deferred |
 | 17 | [GST-EINVOICING](17-GST-EINVOICING.md) | GST 2.0 splits, IRN/QR, e-way bill, returns, ITC | ✅ | — |
@@ -37,7 +38,7 @@ Deep, code-verified module planning for **hertex-erp**. Each doc follows the 18-
 | 20 | [ASSETS](20-ASSETS.md) | Fixed assets, depreciation, disposal, ITC reversal | ✅ | — |
 | 99 | [IMPLEMENTATION-SEQUENCE](99-IMPLEMENTATION-SEQUENCE.md) | Ordered master roadmap (phases 0–6), dependency graph, MVP slice | ✅ | — |
 
-**24 docs total** (00–20 + 08a + 09a + 99 index/sequence).
+**25 docs total** (00–20 + 08a + 09a + 15A + 99 index/sequence).
 
 ---
 

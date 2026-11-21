@@ -156,3 +156,43 @@ async def test_draft_journal_cannot_be_reversed(client, auth, remove_test_period
         json={"reversal_date": date.today().isoformat(), "reason": "Draft test"},
     )
     assert response.status_code == 422, response.text
+
+
+@pytest.mark.asyncio
+async def test_manual_journal_idempotency_key_replays_only_same_request(client, auth):
+    marker = uuid4().hex[:8]
+    account_response = await client.get("/api/v1/finance/accounts", headers=auth)
+    accounts = {row["code"]: row["id"] for row in account_response.json()["items"]}
+    headers = {**auth, "Idempotency-Key": f"manual-journal-{marker}"}
+    payload = {
+        "entry_date": date.today().isoformat(),
+        "reference": f"IDEMPOTENT:{marker}",
+        "memo": "Idempotent adjustment",
+        "lines": [
+            {"account_id": accounts["1010"], "debit": "9.25", "credit": "0"},
+            {"account_id": accounts["4000"], "debit": "0", "credit": "9.25"},
+        ],
+    }
+
+    created = await client.post(
+        "/api/v1/finance/journal-entries",
+        headers=headers,
+        json=payload,
+    )
+    assert created.status_code == 201, created.text
+    replay = await client.post(
+        "/api/v1/finance/journal-entries",
+        headers=headers,
+        json=payload,
+    )
+    assert replay.status_code == 201, replay.text
+    assert replay.json()["id"] == created.json()["id"]
+    assert replay.json()["source_module"] == "finance"
+    assert replay.json()["source_document_type"] == "manual_journal"
+
+    different_request = await client.post(
+        "/api/v1/finance/journal-entries",
+        headers=headers,
+        json={**payload, "memo": "Different request"},
+    )
+    assert different_request.status_code == 409, different_request.text

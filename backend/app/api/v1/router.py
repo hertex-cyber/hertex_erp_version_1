@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.modules.ai.router import router as ai_router
 from app.modules.analytics.router import router as analytics_router
 from app.modules.crm.router import router as crm_router
+from app.modules.finance.compliance_router import router as finance_compliance_router
 from app.modules.finance.router import router as finance_router
 from app.modules.hr.router import router as hr_router
 from app.modules.identity.router import (
@@ -11,6 +12,7 @@ from app.modules.identity.router import (
     roles_router,
     users_router,
 )
+from app.modules.integrations.external_router import router as external_integrations_router
 from app.modules.integrations.router import router as integrations_router
 from app.modules.inventory.router import router as inventory_router
 from app.modules.marketing.router import router as marketing_router
@@ -32,6 +34,7 @@ api_router.include_router(crm_router)
 api_router.include_router(inventory_router)
 api_router.include_router(warehouse_router)
 api_router.include_router(finance_router)
+api_router.include_router(finance_compliance_router)
 api_router.include_router(sales_router)
 api_router.include_router(procurement_router)
 api_router.include_router(hr_router)
@@ -41,5 +44,6 @@ api_router.include_router(support_router)
 api_router.include_router(marketing_router)
 api_router.include_router(settings_router)
 api_router.include_router(integrations_router)
+api_router.include_router(external_integrations_router)
 api_router.include_router(analytics_router)
 api_router.include_router(ai_router)
